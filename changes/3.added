@@ -1,0 +1,1 @@
+Added the `default_node_mapping` and `request_timeout` app settings, for the fallback containerlab node and the timeout of calls to clab-api-server hosts.
