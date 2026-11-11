@@ -337,3 +337,5 @@ GEMINI.md
 .ollama/
 # https://github.com/kirodotdev/Kiro
 .kiro/
+
+.sdlc-crew-run/
