@@ -44,11 +44,12 @@ Once installed, the app needs to be enabled in your Nautobot configuration. The 
 # In your nautobot_config.py
 PLUGINS = ["containerlab_orchestrator"]
 
-# PLUGINS_CONFIG = {
-#   "containerlab_orchestrator": {
-#     ADD YOUR SETTINGS HERE
-#   }
-# }
+PLUGINS_CONFIG = {
+    "containerlab_orchestrator": {
+        "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "request_timeout": 300,
+    }
+}
 ```
 
 Once the Nautobot configuration is updated, run the Post Upgrade command (`nautobot-server post_upgrade`) to run migrations and clear any cache:
@@ -69,13 +70,9 @@ sudo systemctl restart nautobot nautobot-worker nautobot-scheduler
 
 ## App Configuration
 
-!!! warning "Developer Note - Remove Me!"
-    Any configuration required to get the App set up. Edit the table below as per the examples provided.
-
 The app behavior can be controlled with the following list of settings:
 
-| Key     | Example | Default | Description                          |
-| ------- | ------ | -------- | ------------------------------------- |
-| `enable_backup` | `True` | `True` | A boolean to represent whether or not to run backup configurations within the app. |
-| `platform_slug_map` | `{"cisco_wlc": "cisco_aireos"}` | `None` | A dictionary in which the key is the platform slug and the value is what netutils uses in any "network_os" parameter. |
-| `per_feature_bar_width` | `0.15` | `0.15` | The width of the table bar within the overview report |
+| Key | Example | Default | Description |
+| --- | ------- | ------- | ----------- |
+| `default_node_mapping` | `{"kind": "nokia_srlinux", "image": "ghcr.io/nokia/srlinux:latest"}` | `{"kind": "linux", "image": "alpine:latest"}` | The containerlab node kind and image that the app uses when no NodeMapping matches a device. When you set this value, you must give both `kind` and `image`. |
+| `request_timeout` | `60` | `300` | The timeout in seconds of each call to a clab-api-server host. The value is an integer of 1 or more. |
