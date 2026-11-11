@@ -70,7 +70,7 @@ sudo systemctl restart nautobot nautobot-worker nautobot-scheduler
 
 ## App Configuration
 
-The app behavior can be controlled with the following list of settings:
+Use these settings to control the app:
 
 | Key | Example | Default | Description |
 | --- | ------- | ------- | ----------- |
