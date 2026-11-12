@@ -120,11 +120,13 @@ class ContainerlabHostCleanTestCase(TestCase):
             host.full_clean()
         self.assertIn("remote_url", context.exception.message_dict)
 
-    def test_url_rejects_malformed_ipv6_host(self):
-        host = self.build_host(create_http_secrets_group("Bad IPv6"), remote_url="https://[::1")
-        with self.assertRaises(ValidationError) as context:
-            host.full_clean()
-        self.assertIn("remote_url", context.exception.message_dict)
+    def test_url_rejects_malformed_ipv6_host_and_port_out_of_range(self):
+        secrets_group = create_http_secrets_group("Bad URL")
+        for url in ("https://[::1", "https://clab01:99999"):
+            with self.subTest(url=url):
+                with self.assertRaises(ValidationError) as context:
+                    self.build_host(secrets_group, remote_url=url).full_clean()
+                self.assertEqual(context.exception.message_dict["remote_url"], ["Enter a valid URL."])
 
     def test_url_rejects_user_name_and_password(self):
         secrets_group = create_http_secrets_group("User info")
