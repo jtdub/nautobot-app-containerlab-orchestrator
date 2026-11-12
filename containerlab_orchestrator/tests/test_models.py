@@ -115,6 +115,23 @@ class ContainerlabHostCleanTestCase(TestCase):
         host.full_clean()
 
 
+    def test_url_rejects_scheme_other_than_http_and_https(self):
+        host = self.build_host(create_http_secrets_group("SSH scheme"), remote_url="ssh://clab01:8080")
+        with self.assertRaises(ValidationError) as context:
+            host.full_clean()
+        self.assertIn("remote_url", context.exception.message_dict)
+
+    def test_url_rejects_user_name_and_password(self):
+        secrets_group = create_http_secrets_group("User info")
+        for url in ("https://admin:secret@clab01:8080", "https://admin@clab01:8080"):
+            with self.subTest(url=url):
+                with self.assertRaises(ValidationError) as context:
+                    self.build_host(secrets_group, remote_url=url).full_clean()
+                self.assertEqual(
+                    context.exception.message_dict["remote_url"],
+                    ["Do not put a user name or a password in the URL. Use the Secrets Group."],
+                )
+
 class ContainerlabHostDeleteTestCase(TestCase):
     """Test the protection of a Secrets Group that a host uses."""
 

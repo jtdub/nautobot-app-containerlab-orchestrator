@@ -1,5 +1,7 @@
 """Models for the containerlab_orchestrator app."""
 
+from urllib.parse import urlsplit
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
@@ -10,6 +12,15 @@ from nautobot.extras.models import SecretsGroupAssociation
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 
 
+def validate_clab_api_url(value):
+    """Reject a URL that is not http or https, or that holds a user name or a password."""
+    parts = urlsplit(value)
+    if parts.scheme.lower() not in ("http", "https"):
+        raise ValidationError("Use an http:// or https:// URL.")
+    if parts.username is not None or parts.password is not None:
+        raise ValidationError("Do not put a user name or a password in the URL. Use the Secrets Group.")
+
+
 @extras_features("custom_links", "custom_validators", "export_templates", "graphql", "webhooks")
 class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
     """A containerlab host that runs clab-api-server."""
@@ -17,6 +28,7 @@ class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
     name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)
     remote_url = LaxURLField(
         max_length=500,
+        validators=[validate_clab_api_url],
         verbose_name="URL",
         help_text="The clab-api-server URL, for example https://clab01:8080.",
     )
