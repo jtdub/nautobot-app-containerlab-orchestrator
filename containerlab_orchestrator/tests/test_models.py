@@ -1,5 +1,7 @@
 """Tests for the ContainerlabHost model."""
 
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
@@ -88,6 +90,12 @@ class ContainerlabHostCleanTestCase(TestCase):
         with self.assertRaises(ValidationError) as context:
             host.full_clean()
         self.assertEqual(context.exception.message_dict["secrets_group"], ["This field cannot be null."])
+
+    def test_clean_with_unknown_secrets_group_raises_validation_error(self):
+        host = ContainerlabHost(name="clab01", remote_url="https://clab01:8080", secrets_group_id=uuid.uuid4())
+        with self.assertRaises(ValidationError) as context:
+            host.full_clean()
+        self.assertIn("secrets_group", context.exception.message_dict)
 
     def test_duplicate_name_fails_validation(self):
         secrets_group = create_http_secrets_group("Shared")

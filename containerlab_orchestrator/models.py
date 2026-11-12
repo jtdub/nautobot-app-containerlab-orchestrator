@@ -2,15 +2,12 @@
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
+from nautobot.apps.choices import SecretsGroupAccessTypeChoices
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
 from nautobot.apps.models import LaxURLField, PrimaryModel, extras_features
+from nautobot.extras.models import SecretsGroupAssociation
 
-REQUIRED_HTTP_SECRET_TYPES = (
-    SecretsGroupSecretTypeChoices.TYPE_USERNAME,
-    SecretsGroupSecretTypeChoices.TYPE_PASSWORD,
-)
-"""Secret types that a host Secrets Group must hold with the HTTP(S) access type."""
+from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 
 
 @extras_features("custom_links", "custom_validators", "export_templates", "graphql", "webhooks")
@@ -48,7 +45,8 @@ class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
         if not self.secrets_group_id:
             return
         present_types = set(
-            self.secrets_group.secrets_group_associations.filter(
+            SecretsGroupAssociation.objects.filter(
+                secrets_group_id=self.secrets_group_id,
                 access_type=SecretsGroupAccessTypeChoices.TYPE_HTTP,
                 secret_type__in=REQUIRED_HTTP_SECRET_TYPES,
             ).values_list("secret_type", flat=True)
