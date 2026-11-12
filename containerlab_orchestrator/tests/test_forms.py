@@ -4,6 +4,7 @@ from nautobot.apps.testing import FormTestCases
 
 from containerlab_orchestrator.forms import ContainerlabHostForm
 from containerlab_orchestrator.tests.fixtures import create_http_secrets_group
+from containerlab_orchestrator.tests.test_models import MISSING_PASSWORD_MESSAGE
 
 
 class ContainerlabHostFormTestCase(FormTestCases.BaseFormTestCase):
@@ -33,4 +34,4 @@ class ContainerlabHostFormTestCase(FormTestCases.BaseFormTestCase):
         form = ContainerlabHostForm(data=self._form_data(incomplete_group))
 
         self.assertFalse(form.is_valid())
-        self.assertEqual(form.errors["secrets_group"], ["The Secrets Group must have an HTTP(S) password secret."])
+        self.assertEqual(form.errors["secrets_group"], [MISSING_PASSWORD_MESSAGE])
