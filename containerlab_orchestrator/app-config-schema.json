@@ -1,1 +1,32 @@
-true
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/jtdub/nautobot-app-containerlab-orchestrator/develop/containerlab_orchestrator/app-config-schema.json",
+    "$comment": "TBD: Update $id, replace `develop` with the future release tag",
+    "type": "object",
+    "properties": {
+        "default_node_mapping": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "default": "linux"
+                },
+                "image": {
+                    "type": "string",
+                    "default": "alpine:latest"
+                }
+            },
+            "required": [
+                "kind",
+                "image"
+            ],
+            "additionalProperties": false
+        },
+        "request_timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 300
+        }
+    },
+    "additionalProperties": false
+}

@@ -18,7 +18,10 @@ class ContainerlabOrchestratorConfig(NautobotAppConfig):
     description = "Containerlab Orchestrator."
     base_url = "containerlab-orchestrator"
     required_settings = []
-    default_settings = {}
+    default_settings = {
+        "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "request_timeout": 300,
+    }
     docs_view_name = "plugins:containerlab_orchestrator:docs"
     searchable_models = []
 

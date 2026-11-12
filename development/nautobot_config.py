@@ -121,11 +121,9 @@ if not _TESTING:
 # Enable installed Apps. Add the name of each App to the list.
 PLUGINS = ["containerlab_orchestrator"]
 
-# Apps configuration settings. These settings are used by various Apps that the user may have installed.
-# Each key in the dictionary is the name of an installed App and its value is a dictionary of settings.
-# PLUGINS_CONFIG = {
-#     'containerlab_orchestrator': {
-#         'foo': 'bar',
-#         'buzz': 'bazz'
-#     }
-# }
+PLUGINS_CONFIG = {
+    "containerlab_orchestrator": {
+        "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "request_timeout": 300,
+    }
+}
