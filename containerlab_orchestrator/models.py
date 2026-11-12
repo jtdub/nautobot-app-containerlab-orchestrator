@@ -1,24 +1,14 @@
 """Models for the containerlab_orchestrator app."""
 
-from urllib.parse import urlsplit
-
 from django.core.exceptions import ValidationError
 from django.db import models
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
 from nautobot.apps.models import LaxURLField, PrimaryModel, extras_features
-from nautobot.extras.models import SecretsGroupAssociation
+from nautobot.extras.models import SecretsGroup, SecretsGroupAssociation
 
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
-
-
-def validate_clab_api_url(value):
-    """Reject a URL that is not http or https, or that holds a user name or a password."""
-    parts = urlsplit(value)
-    if parts.scheme.lower() not in ("http", "https"):
-        raise ValidationError("Use an http:// or https:// URL.")
-    if parts.username is not None or parts.password is not None:
-        raise ValidationError("Do not put a user name or a password in the URL. Use the Secrets Group.")
+from containerlab_orchestrator.validators import validate_clab_api_url
 
 
 @extras_features("custom_links", "custom_validators", "export_templates", "graphql", "webhooks")
@@ -54,7 +44,7 @@ class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
     def clean(self):
         """Reject a Secrets Group without an HTTP(S) username secret and an HTTP(S) password secret."""
         super().clean()
-        if not self.secrets_group_id:
+        if not SecretsGroup.objects.filter(pk=self.secrets_group_id).exists():
             return
         present_types = set(
             SecretsGroupAssociation.objects.filter(

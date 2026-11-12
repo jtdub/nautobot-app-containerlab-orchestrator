@@ -95,7 +95,7 @@ class ContainerlabHostCleanTestCase(TestCase):
         host = ContainerlabHost(name="clab01", remote_url="https://clab01:8080", secrets_group_id=uuid.uuid4())
         with self.assertRaises(ValidationError) as context:
             host.full_clean()
-        self.assertIn("secrets_group", context.exception.message_dict)
+        self.assertEqual(len(context.exception.message_dict["secrets_group"]), 1)
 
     def test_duplicate_name_fails_validation(self):
         secrets_group = create_http_secrets_group("Shared")
@@ -120,6 +120,12 @@ class ContainerlabHostCleanTestCase(TestCase):
             host.full_clean()
         self.assertIn("remote_url", context.exception.message_dict)
 
+    def test_url_rejects_malformed_ipv6_host(self):
+        host = self.build_host(create_http_secrets_group("Bad IPv6"), remote_url="https://[::1")
+        with self.assertRaises(ValidationError) as context:
+            host.full_clean()
+        self.assertIn("remote_url", context.exception.message_dict)
+
     def test_url_rejects_user_name_and_password(self):
         secrets_group = create_http_secrets_group("User info")
         for url in ("https://admin:secret@clab01:8080", "https://admin@clab01:8080"):
@@ -128,7 +134,7 @@ class ContainerlabHostCleanTestCase(TestCase):
                     self.build_host(secrets_group, remote_url=url).full_clean()
                 self.assertEqual(
                     context.exception.message_dict["remote_url"],
-                    ["Do not put a user name or a password in the URL. Use the Secrets Group."],
+                    ["Do not put a username or a password in the URL. Use the Secrets Group."],
                 )
 
 
