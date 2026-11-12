@@ -26,7 +26,7 @@ class ContainerlabHostForm(NautobotModelForm):  # pylint: disable=too-many-ances
         """Meta attributes for ContainerlabHostForm."""
 
         model = ContainerlabHost
-        fields = ["name", "remote_url", "verify_ssl", "secrets_group", "description", "tags"]
+        fields = "__all__"
 
 
 class ContainerlabHostBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: disable=too-many-ancestors
