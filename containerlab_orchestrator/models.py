@@ -18,7 +18,7 @@ class ContainerlabHost(PrimaryModel):
     """A containerlab host that runs clab-api-server."""
 
     name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)
-    url = LaxURLField(
+    remote_url = LaxURLField(
         max_length=500,
         verbose_name="URL",
         help_text="The clab-api-server URL, for example https://clab01:8080.",

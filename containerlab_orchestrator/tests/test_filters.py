@@ -14,7 +14,7 @@ class ContainerlabHostFilterTestCase(FilterTestCases.FilterTestCase):
     filterset = ContainerlabHostFilterSet
     generic_filter_tests = (
         ["name"],
-        ["url"],
+        ["remote_url"],
         ["description"],
         ["secrets_group", "secrets_group__name"],
         ["secrets_group", "secrets_group__id"],

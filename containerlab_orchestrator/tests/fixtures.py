@@ -39,7 +39,7 @@ def create_containerlab_hosts():
         hosts.append(
             ContainerlabHost.objects.create(
                 name=f"clab{number:02d}",
-                url=f"https://clab{number:02d}.example.com:8080",
+                remote_url=f"https://clab{number:02d}.example.com:8080",
                 verify_ssl=number != 3,
                 secrets_group=create_http_secrets_group(f"Containerlab credentials {number}"),
                 description=f"Lab server {number}",

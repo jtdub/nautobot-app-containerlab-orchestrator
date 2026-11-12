@@ -24,23 +24,23 @@ class ContainerlabHostModelTestCase(ModelTestCases.BaseModelTestCase):
 
     def test_get_docs_url(self):
         """Skip the documentation check, because issue #25 adds the host documentation page."""
-        self.skipTest("Issue #25 adds the ContainerlabHost documentation page.")
+        self.skipTest("The documentation page for this model comes in #25.")
 
     def test_str_returns_name(self):
         host = ContainerlabHost.objects.get(name="clab01")
         self.assertEqual(str(host), "clab01")
 
     def test_verify_ssl_defaults_to_true(self):
-        host = ContainerlabHost(name="clab-default", url="https://clab-default:8080")
+        host = ContainerlabHost(name="clab-default", remote_url="https://clab-default:8080")
         self.assertTrue(host.verify_ssl)
 
 
 class ContainerlabHostCleanTestCase(TestCase):
     """Test the validation of a host and its Secrets Group."""
 
-    def build_host(self, secrets_group, name="clab01", url="https://clab01:8080"):
+    def build_host(self, secrets_group, name="clab01", remote_url="https://clab01:8080"):
         """Return an unsaved host with the given Secrets Group."""
-        return ContainerlabHost(name=name, url=url, secrets_group=secrets_group)
+        return ContainerlabHost(name=name, remote_url=remote_url, secrets_group=secrets_group)
 
     def assert_secrets_group_error(self, host, message):
         """Assert that full_clean() reports the message on the secrets_group field."""
@@ -92,7 +92,7 @@ class ContainerlabHostCleanTestCase(TestCase):
     def test_duplicate_name_fails_validation(self):
         secrets_group = create_http_secrets_group("Shared")
         self.build_host(secrets_group).validated_save()
-        duplicate = self.build_host(secrets_group, url="https://clab02:8080")
+        duplicate = self.build_host(secrets_group, remote_url="https://clab02:8080")
         with self.assertRaises(ValidationError) as context:
             duplicate.full_clean()
         self.assertIn("name", context.exception.message_dict)
@@ -103,7 +103,7 @@ class ContainerlabHostCleanTestCase(TestCase):
         self.build_host(secrets_group, name="clab02").full_clean()
 
     def test_url_accepts_short_host_name(self):
-        host = self.build_host(create_http_secrets_group("Short"), url="http://clab01:8080")
+        host = self.build_host(create_http_secrets_group("Short"), remote_url="http://clab01:8080")
         host.full_clean()
 
 
@@ -112,6 +112,6 @@ class ContainerlabHostDeleteTestCase(TestCase):
 
     def test_delete_secrets_group_in_use_raises_protected_error(self):
         secrets_group = create_http_secrets_group("In use")
-        ContainerlabHost.objects.create(name="clab01", url="https://clab01:8080", secrets_group=secrets_group)
+        ContainerlabHost.objects.create(name="clab01", remote_url="https://clab01:8080", secrets_group=secrets_group)
         with self.assertRaises(ProtectedError):
             secrets_group.delete()

@@ -12,7 +12,7 @@ class ContainerlabHostFilterSet(NautobotFilterSet):
     q = SearchFilter(
         filter_predicates={
             "name": "icontains",
-            "url": "icontains",
+            "remote_url": "icontains",
             "description": "icontains",
         },
     )
