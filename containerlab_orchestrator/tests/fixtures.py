@@ -6,6 +6,7 @@ from unittest import mock
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.extras.models import Secret, SecretsGroup, SecretsGroupAssociation
 
+from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 from containerlab_orchestrator.models import ContainerlabHost
 
 SECRET_VALUE = "clab-secret-value-do-not-show"
@@ -19,10 +20,7 @@ def secret_variable_name(secret_type):
 
 def patch_secret_variables():
     """Return a patch that sets each HTTP(S) test secret variable to SECRET_VALUE."""
-    variables = {
-        secret_variable_name(secret_type): SECRET_VALUE
-        for secret_type in (SecretsGroupSecretTypeChoices.TYPE_USERNAME, SecretsGroupSecretTypeChoices.TYPE_PASSWORD)
-    }
+    variables = {secret_variable_name(secret_type): SECRET_VALUE for secret_type in REQUIRED_HTTP_SECRET_TYPES}
     return mock.patch.dict(os.environ, variables)
 
 

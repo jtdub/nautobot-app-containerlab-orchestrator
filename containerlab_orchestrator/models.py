@@ -42,9 +42,9 @@ class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
         return self.name
 
     def clean(self):
-        """Reject a Secrets Group without an HTTP(S) username secret and an HTTP(S) password secret."""
+        """Reject a Secrets Group that has no HTTP(S) username secret or no HTTP(S) password secret."""
         super().clean()
-        if not SecretsGroup.objects.filter(pk=self.secrets_group_id).exists():
+        if self.secrets_group_id is None:
             return
         present_types = set(
             SecretsGroupAssociation.objects.filter(
@@ -54,6 +54,6 @@ class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
             ).values_list("secret_type", flat=True)
         )
         missing_types = [secret_type for secret_type in REQUIRED_HTTP_SECRET_TYPES if secret_type not in present_types]
-        if missing_types:
+        if missing_types and SecretsGroup.objects.filter(pk=self.secrets_group_id).exists():
             missing_secrets = " and an ".join(f"HTTP(S) {secret_type} secret" for secret_type in missing_types)
             raise ValidationError({"secrets_group": f"The Secrets Group must have an {missing_secrets}."})
