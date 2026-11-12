@@ -9,8 +9,10 @@ from nautobot.apps.forms import (
     NautobotBulkEditForm,
     NautobotFilterForm,
     NautobotModelForm,
+    StaticSelect2,
     TagFilterField,
     TagsBulkEditFormMixin,
+    add_blank_choice,
 )
 from nautobot.extras.models import SecretsGroup
 
@@ -33,7 +35,7 @@ class ContainerlabHostBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):
     """Form to edit many ContainerlabHost records at once."""
 
     pk = forms.ModelMultipleChoiceField(queryset=ContainerlabHost.objects.all(), widget=forms.MultipleHiddenInput)
-    remote_url = forms.CharField(required=False, label="URL")
+    remote_url = forms.CharField(required=False, max_length=500, label="URL")
     verify_ssl = forms.NullBooleanField(required=False, label="Verify SSL", widget=BulkEditNullBooleanSelect)
     secrets_group = DynamicModelChoiceField(required=False, queryset=SecretsGroup.objects.all())
     description = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH)
@@ -57,5 +59,9 @@ class ContainerlabHostFilterForm(NautobotFilterForm):  # pylint: disable=too-man
         to_field_name="name",
         required=False,
     )
-    verify_ssl = forms.NullBooleanField(required=False, label="Verify SSL", widget=BulkEditNullBooleanSelect)
+    verify_ssl = forms.NullBooleanField(
+        required=False,
+        label="Verify SSL",
+        widget=StaticSelect2(choices=add_blank_choice((("True", "Yes"), ("False", "No")))),
+    )
     tag = TagFilterField(model)

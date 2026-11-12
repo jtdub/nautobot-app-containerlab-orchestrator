@@ -41,6 +41,20 @@ class ContainerlabHostViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # 
             "secrets_group": cls.secrets_group.pk,
         }
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_list_filtered_by_verify_ssl_shows_only_matching_hosts(self):
+        self.add_permissions("containerlab_orchestrator.view_containerlabhost")
+
+        response = self.client.get(self._get_url("list"), {"verify_ssl": "True"}, headers={"HX-Request": "true"})
+
+        self.assertHttpStatus(response, 200)
+        for host in ContainerlabHost.objects.all():
+            with self.subTest(host=host.name):
+                if host.verify_ssl:
+                    self.assertContains(response, host.get_absolute_url())
+                else:
+                    self.assertNotContains(response, host.get_absolute_url())
+
 
 class ContainerlabHostBulkEditJobTestCase(TransactionTestCase):
     """Run the bulk edit system job on ContainerlabHost.

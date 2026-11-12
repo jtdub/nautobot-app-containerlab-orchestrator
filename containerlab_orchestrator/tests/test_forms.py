@@ -1,8 +1,10 @@
 """Tests for the ContainerlabHost forms."""
 
-from nautobot.apps.testing import FormTestCases
+import re
 
-from containerlab_orchestrator.forms import ContainerlabHostForm
+from nautobot.apps.testing import FormTestCases, TestCase
+
+from containerlab_orchestrator.forms import ContainerlabHostFilterForm, ContainerlabHostForm
 from containerlab_orchestrator.tests.fixtures import create_http_secrets_group
 from containerlab_orchestrator.tests.test_models import MISSING_PASSWORD_MESSAGE
 
@@ -35,3 +37,13 @@ class ContainerlabHostFormTestCase(FormTestCases.BaseFormTestCase):
 
         self.assertFalse(form.is_valid())
         self.assertEqual(form.errors["secrets_group"], [MISSING_PASSWORD_MESSAGE])
+
+
+class ContainerlabHostFilterFormTestCase(TestCase):
+    """Test the ContainerlabHost list filter form."""
+
+    def test_verify_ssl_filter_offers_empty_blank_yes_and_no(self):
+        rendered = str(ContainerlabHostFilterForm()["verify_ssl"])
+
+        options = re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', rendered)
+        self.assertEqual(options, [("", "---------"), ("True", "Yes"), ("False", "No")])
