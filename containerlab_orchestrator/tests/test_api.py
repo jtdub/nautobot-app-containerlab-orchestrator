@@ -14,7 +14,7 @@ SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the API must never return."""
 
 
-class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):
+class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
     """Run the generic Nautobot REST API tests on ContainerlabHost."""
 
     model = ContainerlabHost

@@ -14,7 +14,7 @@ REQUIRED_HTTP_SECRET_TYPES = (
 
 
 @extras_features("custom_links", "custom_validators", "export_templates", "graphql", "webhooks")
-class ContainerlabHost(PrimaryModel):
+class ContainerlabHost(PrimaryModel):  # pylint: disable=too-many-ancestors
     """A containerlab host that runs clab-api-server."""
 
     name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, unique=True)

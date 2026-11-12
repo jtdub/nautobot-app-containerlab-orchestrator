@@ -7,7 +7,7 @@ from containerlab_orchestrator.models import ContainerlabHost
 from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts
 
 
-class ContainerlabHostFilterTestCase(FilterTestCases.FilterTestCase):
+class ContainerlabHostFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
     """Run the generic Nautobot filter tests on ContainerlabHostFilterSet."""
 
     queryset = ContainerlabHost.objects.all()
