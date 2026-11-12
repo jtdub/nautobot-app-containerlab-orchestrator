@@ -1,15 +1,9 @@
 """Tests for the ContainerlabHost GraphQL type."""
 
-import os
-from unittest import mock
-
 from nautobot.apps.graphql import execute_query
 from nautobot.apps.testing import TestCase
 
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts
-
-SECRET_VALUE = "clab-secret-value-do-not-show"
-"""A secret value that GraphQL must never return."""
+from containerlab_orchestrator.tests.fixtures import SECRET_VALUE, create_containerlab_hosts, patch_secret_variables
 
 HOSTS_QUERY = """
 query {
@@ -57,7 +51,7 @@ class ContainerlabHostGraphQLTestCase(TestCase):
         self.assertEqual(hosts[0]["secrets_group"]["name"], "Containerlab credentials 1")
 
     def test_query_returns_no_secret_value(self):
-        with mock.patch.dict(os.environ, {"CLAB_USERNAME": SECRET_VALUE, "CLAB_PASSWORD": SECRET_VALUE}):
+        with patch_secret_variables():
             result = execute_query(HOSTS_QUERY, user=self.user)
 
         self.assertIsNone(result.errors)

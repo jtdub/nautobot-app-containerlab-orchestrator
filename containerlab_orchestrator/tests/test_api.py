@@ -1,17 +1,15 @@
 """Tests for the ContainerlabHost REST API."""
 
-import os
-from unittest import mock
-
-from django.urls import reverse
 from nautobot.apps.testing import APIViewTestCases
 from rest_framework import status
 
 from containerlab_orchestrator.models import ContainerlabHost
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_http_secrets_group
-
-SECRET_VALUE = "clab-secret-value-do-not-show"
-"""A secret value that the API must never return."""
+from containerlab_orchestrator.tests.fixtures import (
+    SECRET_VALUE,
+    create_containerlab_hosts,
+    create_http_secrets_group,
+    patch_secret_variables,
+)
 
 
 class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
@@ -52,13 +50,22 @@ class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: 
         )
         self.assertFalse(ContainerlabHost.objects.filter(name="clab-bad").exists())
 
+    def test_csv_import_with_incomplete_secrets_group_returns_400(self):
+        self.add_permissions("containerlab_orchestrator.add_containerlabhost", "extras.view_secretsgroup")
+        incomplete_group = create_http_secrets_group("No password CSV", password=False)
+        csv_data = f"name,remote_url,secrets_group\nclab-csv,https://clab-csv:8080,{incomplete_group.pk}\n"
+
+        response = self.client.post(self._get_list_url(), csv_data, content_type="text/csv", **self.header)
+
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("The Secrets Group must have an HTTP(S) password secret.", str(response.data))
+        self.assertFalse(ContainerlabHost.objects.filter(name="clab-csv").exists())
+
     def test_response_contains_no_secret_value(self):
         self.add_permissions("containerlab_orchestrator.view_containerlabhost", "extras.view_secretsgroup")
         host = ContainerlabHost.objects.get(name="clab01")
-        url = reverse("plugins-api:containerlab_orchestrator-api:containerlabhost-detail", kwargs={"pk": host.pk})
-
-        with mock.patch.dict(os.environ, {"CLAB_USERNAME": SECRET_VALUE, "CLAB_PASSWORD": SECRET_VALUE}):
-            response = self.client.get(f"{url}?depth=2", **self.header)
+        with patch_secret_variables():
+            response = self.client.get(f"{self._get_detail_url(host)}?depth=2", **self.header)
 
         self.assertHttpStatus(response, status.HTTP_200_OK)
         self.assertEqual(response.data["secrets_group"]["id"], str(host.secrets_group.pk))

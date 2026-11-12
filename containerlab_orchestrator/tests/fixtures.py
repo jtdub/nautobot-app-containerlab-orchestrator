@@ -1,9 +1,29 @@
 """Test data helpers for the containerlab_orchestrator tests."""
 
+import os
+from unittest import mock
+
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.extras.models import Secret, SecretsGroup, SecretsGroupAssociation
 
 from containerlab_orchestrator.models import ContainerlabHost
+
+SECRET_VALUE = "clab-secret-value-do-not-show"
+"""A secret value that the REST API and GraphQL must never return."""
+
+
+def secret_variable_name(secret_type):
+    """Return the environment variable that the test secret of this type reads."""
+    return f"CLAB_{secret_type.upper()}"
+
+
+def patch_secret_variables():
+    """Return a patch that sets each HTTP(S) test secret variable to SECRET_VALUE."""
+    variables = {
+        secret_variable_name(secret_type): SECRET_VALUE
+        for secret_type in (SecretsGroupSecretTypeChoices.TYPE_USERNAME, SecretsGroupSecretTypeChoices.TYPE_PASSWORD)
+    }
+    return mock.patch.dict(os.environ, variables)
 
 
 def create_http_secrets_group(name, username=True, password=True):
@@ -21,7 +41,7 @@ def create_http_secrets_group(name, username=True, password=True):
         secret = Secret.objects.create(
             name=f"{name} {secret_type}",
             provider="environment-variable",
-            parameters={"variable": f"CLAB_{secret_type.upper()}"},
+            parameters={"variable": secret_variable_name(secret_type)},
         )
         SecretsGroupAssociation.objects.create(
             secrets_group=secrets_group,
