@@ -53,11 +53,12 @@ class ContainerlabHostFilterForm(NautobotFilterForm):  # pylint: disable=too-man
     field_order = ["q", "name", "secrets_group", "verify_ssl", "tag"]
 
     q = forms.CharField(required=False, label="Search")
-    name = forms.CharField(required=False)
+    name = forms.CharField(required=False, label="Name")
     secrets_group = DynamicModelMultipleChoiceField(
         queryset=SecretsGroup.objects.all(),
         to_field_name="name",
         required=False,
+        label="Secrets group",
     )
     verify_ssl = forms.NullBooleanField(
         required=False,

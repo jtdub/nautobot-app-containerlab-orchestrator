@@ -47,3 +47,14 @@ class ContainerlabHostFilterFormTestCase(TestCase):
 
         options = re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', rendered)
         self.assertEqual(options, [("", "---------"), ("True", "Yes"), ("False", "No")])
+
+    def test_name_filter_shows_name_placeholder(self):
+        rendered = str(ContainerlabHostFilterForm()["name"])
+
+        self.assertIn('placeholder="Name"', rendered)
+
+    def test_declared_filter_fields_show_no_none_placeholder(self):
+        form = ContainerlabHostFilterForm()
+        for field_name in ContainerlabHostFilterForm.declared_fields:
+            with self.subTest(field=field_name):
+                self.assertNotIn('placeholder="None"', str(form[field_name]))
