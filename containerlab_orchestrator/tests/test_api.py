@@ -107,9 +107,10 @@ class NodeMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disab
         """POST a mapping and return the errors of the HTTP 400 response."""
         self.add_permissions("containerlab_orchestrator.add_nodemapping", "dcim.view_devicetype", "dcim.view_platform")
         payload = {"device_type": self.free_device_type.pk, "kind": "ceos", "image": "ceos:4.33.0F", **data}
+        before = NodeMapping.objects.count()
         response = self.client.post(self._get_list_url(), payload, format="json", **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(NodeMapping.objects.count(), 3)
+        self.assertEqual(NodeMapping.objects.count(), before)
         return response.data
 
     def test_both_targets_returns_400(self):

@@ -55,7 +55,7 @@ class NodeMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disa
     def setUpTestData(cls):
         create_node_mappings()
         NodeMapping.objects.create(
-            platform=Platform.objects.create(name="frr"),
+            platform=Platform.objects.create(name="edge-router"),
             kind="linux",
             image="frrouting/frr:v8.4.1",
             memory="1Gb",
@@ -66,8 +66,9 @@ class NodeMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disa
             ("NOKIA_SRL", {"kind": "nokia_srlinux"}),
             ("srlinux:24", {"kind": "nokia_srlinux"}),
             ("IXR-D3", {"kind": "nokia_srlinux"}),
+            ("IXRD3", {"kind": "nokia_srlinux"}),
             ("dcs-7280", {"kind": "ceos"}),
-            ("FRR", {"platform__name": "frr"}),
+            ("EDGE-ROUTER", {"platform__name": "edge-router"}),
         ):
             with self.subTest(value=value):
                 result = self.filterset({"q": value}, self.queryset).qs
