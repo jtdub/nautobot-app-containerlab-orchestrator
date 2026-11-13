@@ -4,10 +4,12 @@ import os
 from unittest import mock
 
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
+from nautobot.dcim.models import DeviceType, Manufacturer, Platform
 from nautobot.extras.models import Secret, SecretsGroup, SecretsGroupAssociation
 
+from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
-from containerlab_orchestrator.models import ContainerlabHost
+from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
 
 SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the REST API and GraphQL must never return."""
@@ -64,3 +66,34 @@ def create_containerlab_hosts():
             )
         )
     return hosts
+
+
+def create_node_mappings():
+    """Return three saved mappings: two for a Device Type and one for a Platform."""
+    arista = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Arista"), model="DCS-7280")
+    nokia = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Nokia"), model="7220 IXR-D3")
+    linux = Platform.objects.create(name="linux")
+    return [
+        NodeMapping.objects.create(
+            device_type=arista,
+            kind="ceos",
+            image="ceos:4.32.0F",
+            env={"CLAB_MGMT_VRF": "MGMT"},
+            cpu=2,
+            memory="2Gb",
+        ),
+        NodeMapping.objects.create(
+            device_type=nokia,
+            kind="nokia_srlinux",
+            image="ghcr.io/nokia/srlinux:24.10",
+            node_type="ixrd3",
+            config_source=NodeMappingConfigSourceChoices.NONE,
+        ),
+        NodeMapping.objects.create(
+            platform=linux,
+            kind="linux",
+            image="alpine:latest",
+            config_source=NodeMappingConfigSourceChoices.JINJA2,
+            config_template="hostname {{ device.name }}",
+        ),
+    ]
