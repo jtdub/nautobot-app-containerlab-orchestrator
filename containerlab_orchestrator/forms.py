@@ -104,11 +104,11 @@ class NodeMappingBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # p
     """Form to edit many NodeMapping records at once."""
 
     pk = forms.ModelMultipleChoiceField(queryset=NodeMapping.objects.all(), widget=forms.MultipleHiddenInput)
-    kind = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH)
-    image = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH)
+    kind = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH, label="Kind")
+    image = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH, label="Image")
     node_type = forms.CharField(required=False, max_length=CHARFIELD_MAX_LENGTH, label="Type")
     cpu = forms.DecimalField(required=False, max_digits=5, decimal_places=2, min_value=Decimal("0.01"), label="CPU")
-    memory = forms.CharField(required=False, max_length=32)
+    memory = forms.CharField(required=False, max_length=32, label="Memory")
     config_source = forms.ChoiceField(
         required=False,
         choices=add_blank_choice(NodeMappingConfigSourceChoices),

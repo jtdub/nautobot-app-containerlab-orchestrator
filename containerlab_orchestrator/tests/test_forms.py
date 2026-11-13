@@ -9,9 +9,11 @@ from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.forms import (
     ContainerlabHostFilterForm,
     ContainerlabHostForm,
+    NodeMappingBulkEditForm,
     NodeMappingFilterForm,
     NodeMappingForm,
 )
+from containerlab_orchestrator.models import NodeMapping
 from containerlab_orchestrator.tests.fixtures import create_http_secrets_group, create_node_mappings
 from containerlab_orchestrator.tests.test_models import (
     BOTH_TARGETS_MESSAGE,
@@ -146,5 +148,15 @@ class NodeMappingFilterFormTestCase(TestCase):
     def test_declared_filter_fields_show_no_none_placeholder(self):
         form = NodeMappingFilterForm()
         for field_name in NodeMappingFilterForm.declared_fields:
+            with self.subTest(field=field_name):
+                self.assertNotIn('placeholder="None"', str(form[field_name]))
+
+
+class NodeMappingBulkEditFormTestCase(TestCase):
+    """Test the NodeMapping bulk edit form."""
+
+    def test_declared_fields_show_no_none_placeholder(self):
+        form = NodeMappingBulkEditForm(NodeMapping)
+        for field_name in NodeMappingBulkEditForm.declared_fields:
             with self.subTest(field=field_name):
                 self.assertNotIn('placeholder="None"', str(form[field_name]))
