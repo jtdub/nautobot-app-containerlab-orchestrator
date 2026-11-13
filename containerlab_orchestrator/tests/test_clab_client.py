@@ -7,6 +7,7 @@ from unittest import mock
 
 import requests
 import yaml
+from django.test import override_settings
 from nautobot.apps.choices import SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import TestCase
 
@@ -292,3 +293,61 @@ class ClabApiClientTestCase(TestCase):
         self.assertIn("Run Inspect", error.message)
         self.assertIsNone(error.__cause__)
         self.assertIsNone(error.__context__)
+
+    def test_requests_use_verify_ssl_of_host(self):
+        for verify_ssl in (True, False):
+            with self.subTest(verify_ssl=verify_ssl), mock.patch.dict(os.environ, {"REQUESTS_CA_BUNDLE": "/tmp/ca.pem"}):
+                self.host.verify_ssl = verify_ssl
+                self.send.return_value = fake_response(200, [])
+                self.logged_in_client().list_images()
+                self.assertIs(self.send.call_args.kwargs["verify"], verify_ssl)
+
+    def test_requests_use_connect_timeout_and_request_timeout_setting(self):
+        self.send.return_value = fake_response(200, [])
+        with override_settings(PLUGINS_CONFIG={clab_client.APP_NAME: {"request_timeout": 42}}):
+            self.logged_in_client().list_images()
+        self.assertEqual(self.send.call_args.kwargs["timeout"], (10, 42))
+
+    def test_requests_use_http_proxies_setting(self):
+        proxies = {"https": "http://proxy:3128"}
+        for setting, expected in ((proxies, proxies), (None, {})):
+            with self.subTest(setting=setting), mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://env-proxy:3128"}):
+                self.send.return_value = fake_response(200, [])
+                with override_settings(HTTP_PROXIES=setting):
+                    self.logged_in_client().list_images()
+                self.assertEqual(self.send.call_args.kwargs["proxies"], expected)
+
+    def test_secret_values_never_appear_in_errors_or_logs(self):
+        def raise_with_request(_adapter, request, **_kwargs):
+            raise requests.ConnectionError("transport failed", request=request)
+
+        def remove_password_variable():
+            os.environ.pop(secret_variable_name(SecretsGroupSecretTypeChoices.TYPE_PASSWORD))
+
+        paths = {
+            "login failure": ([fake_response(401, {"error": "bad credentials"})], None),
+            "login without token": ([fake_response(200, {})], None),
+            "unreadable secret": ([], remove_password_variable),
+            "transport error on login": (raise_with_request, None),
+            "HTTP error after login": ([login_response(), fake_response(500, {"error": "failed"})], None),
+        }
+        with self.assertNoLogs("containerlab_orchestrator.clab_client"):
+            for path, (side_effect, prepare) in paths.items():
+                with self.subTest(path=path), mock.patch.dict(os.environ):
+                    self.send.side_effect = side_effect
+                    if prepare:
+                        prepare()
+                    with self.assertRaises(ClabApiError) as context:
+                        ClabApiClient(self.host).list_images()
+                    error = context.exception
+                    texts = (str(error), error.message, str(error.server_message))
+                    texts += (repr(error.__cause__), repr(error.__context__))
+                    for text in texts:
+                        self.assertNotIn(SECRET_VALUE, text)
+                        self.assertNotIn(TOKEN, text)
+
+    def test_close_closes_session(self):
+        client = ClabApiClient(self.host)
+        with mock.patch.object(client.session, "close") as close:
+            client.close()
+        close.assert_called_once_with()
