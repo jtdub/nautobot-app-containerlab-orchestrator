@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest import mock
 
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.db.models import ProtectedError
 from jinja2 import TemplateError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
@@ -22,7 +23,8 @@ from containerlab_orchestrator.tests.fixtures import (
 
 MISSING_USERNAME_MESSAGE = "The Secrets Group must have an HTTP(S) username secret."
 MISSING_PASSWORD_MESSAGE = "The Secrets Group must have an HTTP(S) password secret."
-ONE_TARGET_MESSAGE = "Set a Device Type or a Platform, but not both."
+BOTH_TARGETS_MESSAGE = "Set a Device Type or a Platform, but not both."
+NO_TARGET_MESSAGE = "Set a Device Type or a Platform."
 
 
 class ContainerlabHostModelTestCase(ModelTestCases.BaseModelTestCase):
@@ -232,11 +234,11 @@ class NodeMappingCleanTestCase(NodeMappingValidationTestCase):
 
     def test_mapping_with_both_targets_fails_validation(self):
         mapping = self.build_mapping(platform=self.platform)
-        self.assert_field_error(mapping, "__all__", ONE_TARGET_MESSAGE)
+        self.assert_field_error(mapping, "__all__", BOTH_TARGETS_MESSAGE)
 
     def test_mapping_with_no_target_fails_validation(self):
         mapping = self.build_mapping(device_type=None)
-        self.assert_field_error(mapping, "__all__", ONE_TARGET_MESSAGE)
+        self.assert_field_error(mapping, "__all__", NO_TARGET_MESSAGE)
 
     def test_duplicate_device_type_fails_validation(self):
         self.build_mapping().validated_save()
@@ -342,4 +344,15 @@ class NodeMappingDeleteTestCase(TestCase):
         platform = Platform.objects.create(name="linux")
         NodeMapping.objects.create(platform=platform, kind="linux", image="alpine:latest")
         platform.delete()
+        self.assertFalse(NodeMapping.objects.exists())
+
+    def test_delete_without_deferred_constraint_checks_deletes_mapping(self):
+        """Delete a Device Type and a Platform the way that MySQL does, with no deferred constraint checks."""
+        device_type = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Nokia"), model="Y")
+        platform = Platform.objects.create(name="eos")
+        NodeMapping.objects.create(device_type=device_type, kind="ceos", image="ceos:4.32.0F")
+        NodeMapping.objects.create(platform=platform, kind="ceos", image="ceos:4.32.0F")
+        with mock.patch.object(connection.features, "can_defer_constraint_checks", False):
+            device_type.delete()
+            platform.delete()
         self.assertFalse(NodeMapping.objects.exists())

@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 from jinja2 import TemplateError, TemplateSyntaxError
@@ -161,9 +161,8 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
         verbose_name = "Node mapping"
         constraints = [
             models.CheckConstraint(
-                name="containerlab_orchestrator_nodemapping_one_target",
-                condition=models.Q(device_type__isnull=False, platform__isnull=True)
-                | models.Q(device_type__isnull=True, platform__isnull=False),
+                name="containerlab_orchestrator_nodemapping_not_both",
+                condition=models.Q(device_type__isnull=True) | models.Q(platform__isnull=True),
                 violation_error_message="Set a Device Type or a Platform, but not both.",
             )
         ]
@@ -177,12 +176,15 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
         return "Node mapping"
 
     def clean(self):
-        """Reject a bad env or overrides object, and a missing or bad config template.
+        """Reject a mapping with no target, a bad env or overrides object, and a missing or bad config template.
 
+        The database constraint rejects only both targets, because a MySQL cascade delete first sets a target to NULL.
         The JSON checks are here and not on the fields, because Django skips field validators for an empty value.
         """
         super().clean()
         errors = {}
+        if self.device_type_id is None and self.platform_id is None:
+            errors[NON_FIELD_ERRORS] = ["Set a Device Type or a Platform."]
         for field_name, validator in (("env", validate_string_map), ("overrides", validate_json_object)):
             try:
                 validator(getattr(self, field_name))
