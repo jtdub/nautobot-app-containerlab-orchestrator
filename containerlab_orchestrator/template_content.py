@@ -21,14 +21,14 @@ def node_mapping_panel(field_name):
     )
 
 
-class DeviceTypeNodeMappingContent(TemplateExtension):
+class DeviceTypeNodeMappingContent(TemplateExtension):  # pylint: disable=abstract-method
     """Add the Node Mappings panel to the Device Type detail page."""
 
     model = "dcim.devicetype"
     object_detail_panels = (node_mapping_panel("device_type"),)
 
 
-class PlatformNodeMappingContent(TemplateExtension):
+class PlatformNodeMappingContent(TemplateExtension):  # pylint: disable=abstract-method
     """Add the Node Mappings panel to the Platform detail page."""
 
     model = "dcim.platform"

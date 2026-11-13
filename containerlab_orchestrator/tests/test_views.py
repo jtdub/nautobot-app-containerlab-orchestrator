@@ -157,7 +157,9 @@ class NodeMappingViewTestCase(  # pylint: disable=too-many-ancestors
     @classmethod
     def setUpTestData(cls):
         create_node_mappings()
-        device_type = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v")
+        device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
+        )
         cls.form_data = {
             "device_type": device_type.pk,
             "kind": "ceos",

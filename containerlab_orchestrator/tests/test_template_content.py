@@ -63,7 +63,9 @@ class NodeMappingPanelTestCase(TestCase):
 
         response = self.client.get(self._add_link("device_type", self.device_type))
 
-        self.assertBodyContains(response, f'<option value="{self.device_type.pk}" selected>DCS-7280</option>', html=True)
+        self.assertBodyContains(
+            response, f'<option value="{self.device_type.pk}" selected>DCS-7280</option>', html=True
+        )
 
     def test_panel_hides_mapping_without_view_permission(self):
         self.add_permissions("dcim.view_devicetype")
@@ -79,5 +81,7 @@ class NodeMappingPanelTestCase(TestCase):
 
         response = self.client.get(self.platform.get_absolute_url())
 
-        self.assertBodyContains(response, self._panel_row_link(NodeMapping.objects.get(platform=self.platform)), html=True)
+        self.assertBodyContains(
+            response, self._panel_row_link(NodeMapping.objects.get(platform=self.platform)), html=True
+        )
         self.assertNotContains(response, self._add_link("platform", self.platform))

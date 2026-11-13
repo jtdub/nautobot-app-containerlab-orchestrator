@@ -83,6 +83,7 @@ class NodeMappingFormTestCase(FormTestCases.BaseFormTestCase):
             manufacturer=Manufacturer.objects.create(name="Juniper"), model="vMX"
         )
         cls.free_platform = Platform.objects.create(name="frr")
+        cls.taken_device_type = DeviceType.objects.get(model="DCS-7280")
 
     def _form_data(self, **changes):
         data = {
@@ -94,12 +95,6 @@ class NodeMappingFormTestCase(FormTestCases.BaseFormTestCase):
         }
         data.update(changes)
         return data
-
-    def assert_form_error(self, data, field_name, message):
-        form = NodeMappingForm(data=data)
-
-        self.assertFalse(form.is_valid())
-        self.assertIn(message, form.errors[field_name])
 
     def test_valid_form_saves_mapping(self):
         form = NodeMappingForm(data=self._form_data())
@@ -123,54 +118,26 @@ class NodeMappingFormTestCase(FormTestCases.BaseFormTestCase):
         self.assertIn("not secret", form.fields["env"].help_text)
         self.assertIn("WARNING", form.fields["overrides"].help_text)
 
-    def test_both_targets_show_non_field_error(self):
-        form = NodeMappingForm(data=self._form_data(platform=self.free_platform.pk))
-
-        self.assertFalse(form.is_valid())
-        self.assertIn(BOTH_TARGETS_MESSAGE, form.non_field_errors())
-
-    def test_no_target_shows_non_field_error(self):
-        form = NodeMappingForm(data=self._form_data(device_type=""))
-
-        self.assertFalse(form.is_valid())
-        self.assertIn(NO_TARGET_MESSAGE, form.non_field_errors())
-
-    def test_duplicate_device_type_shows_error(self):
-        taken = DeviceType.objects.get(model="DCS-7280")
-
-        self.assert_form_error(
-            self._form_data(device_type=taken.pk), "device_type", "Node mapping with this Device type already exists."
+    def test_each_rule_shows_form_error(self):
+        cases = (
+            ({"platform": self.free_platform.pk}, "__all__", BOTH_TARGETS_MESSAGE),
+            ({"device_type": ""}, "__all__", NO_TARGET_MESSAGE),
+            ({"device_type": self.taken_device_type.pk}, "device_type", "Node mapping with this Device type already"),
+            ({"env": "[1]"}, "env", "Enter a JSON object"),
+            ({"kind": "Ceos"}, "kind", "Use lowercase letters"),
+            ({"memory": "512"}, "memory", "Enter a number and a unit"),
+            ({"config_source": NodeMappingConfigSourceChoices.JINJA2}, "config_template", "Enter a template when"),
+            ({"config_template": "{% if %}"}, "config_template", "Template syntax error on line 1:"),
         )
+        for changes, field_name, message_start in cases:
+            with self.subTest(changes=changes):
+                form = NodeMappingForm(data=self._form_data(**changes))
 
-    def test_env_list_shows_error(self):
-        self.assert_form_error(
-            self._form_data(env="[1]"), "env", 'Enter a JSON object, for example {"key": "value"}.'
-        )
-
-    def test_uppercase_kind_shows_error(self):
-        self.assert_form_error(
-            self._form_data(kind="Ceos"),
-            "kind",
-            'Use lowercase letters, digits, "_", and "-", and start with a letter.',
-        )
-
-    def test_memory_without_unit_shows_error(self):
-        self.assert_form_error(
-            self._form_data(memory="512"), "memory", "Enter a number and a unit, for example 512mb or 1Gb."
-        )
-
-    def test_jinja2_source_without_template_shows_error(self):
-        self.assert_form_error(
-            self._form_data(config_source=NodeMappingConfigSourceChoices.JINJA2),
-            "config_template",
-            "Enter a template when the config source is Jinja2.",
-        )
-
-    def test_template_syntax_error_shows_error(self):
-        form = NodeMappingForm(data=self._form_data(config_template="{% if %}"))
-
-        self.assertFalse(form.is_valid())
-        self.assertTrue(form.errors["config_template"][0].startswith("Template syntax error on line 1:"))
+                self.assertFalse(form.is_valid())
+                self.assertTrue(
+                    any(message.startswith(message_start) for message in form.errors[field_name]),
+                    form.errors,
+                )
 
 
 class NodeMappingFilterFormTestCase(TestCase):
