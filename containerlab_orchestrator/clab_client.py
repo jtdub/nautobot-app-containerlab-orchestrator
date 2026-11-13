@@ -197,7 +197,7 @@ class ClabApiClient:
         Raises:
             ClabApiError: If the name does not match the lab name rule of the server.
         """
-        if not LAB_NAME_PATTERN.match(name):
+        if not isinstance(name, str) or not LAB_NAME_PATTERN.fullmatch(name):
             raise ClabApiError(
                 f"Host {self.host}: the lab name {name!r} is not valid. Use 1 to 128 letters, digits, '_', or '-'."
             )

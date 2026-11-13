@@ -190,7 +190,7 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
             "deploy": lambda client, name: client.deploy(name, f"name: {name!r}\n"),
         }
         for method_name, call in calls.items():
-            for name in ("", "a/b", "a b", "a?b", "a" * 129):
+            for name in ("", "a/b", "a b", "a?b", "a" * 129, "lab1\n", None):
                 with self.subTest(method=method_name, name=name):
                     with self.assertRaises(ClabApiError) as context:
                         call(ClabApiClient(self.host), name)
@@ -291,6 +291,7 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertIsNone(error.status_code)
         self.assertIn(f"no response came in {client.timeout[1]} seconds", error.message)
         self.assertIn("Run Inspect", error.message)
+        self.assertIn("The lab state is unknown", error.message)
         self.assertIsNone(error.__cause__)
         self.assertIsNone(error.__context__)
 
