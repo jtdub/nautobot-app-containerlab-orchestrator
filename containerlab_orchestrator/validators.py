@@ -52,7 +52,7 @@ def _validate_text_pattern(value, pattern, message):
 
 
 def validate_clab_kind(value):
-    """Reject a containerlab kind that is not lowercase letters, digits, "_", and "-"."""
+    """Reject a containerlab kind that is not lowercase letters, digits, "_", and "-", or that does not start with a letter."""
     _validate_text_pattern(
         value, CLAB_KIND_PATTERN, 'Use lowercase letters, digits, "_", and "-", and start with a letter.'
     )

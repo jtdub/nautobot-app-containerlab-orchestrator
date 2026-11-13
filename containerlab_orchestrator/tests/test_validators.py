@@ -1,7 +1,7 @@
 """Tests for the node mapping validators."""
 
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase
+from nautobot.apps.testing import TestCase
 
 from containerlab_orchestrator.validators import (
     validate_clab_kind,
@@ -16,7 +16,7 @@ JSON_OBJECT_MESSAGE = 'Enter a JSON object, for example {"key": "value"}.'
 STRING_MAP_MESSAGE = "Each key and each value must be a string."
 
 
-class ValidatorTestCase(SimpleTestCase):
+class ValidatorTestCase(TestCase):
     """Base class with helpers for the validator tests."""
 
     def assert_accepts(self, validator, values):
