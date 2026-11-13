@@ -1,6 +1,11 @@
 """Client for the clab-api-server REST API."""
 
+import json
+import re
+from urllib.parse import quote
+
 import requests
+import yaml
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
@@ -15,6 +20,9 @@ CONNECT_TIMEOUT = 10
 
 ERROR_BODY_LIMIT = 200
 """Characters of a response body that an error message shows."""
+
+LAB_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+"""The lab name rule of clab-api-server."""
 
 
 class ClabApiError(Exception):
@@ -76,6 +84,31 @@ class ClabApiClient:
     def list_images(self):
         """Return the container images on the host."""
         return self._request("GET", "/api/v1/images")
+
+    def deploy(self, name, topology_yaml, reconfigure=False):
+        """Deploy the lab from its topology YAML and return the server result.
+
+        Args:
+            name: The lab name. It must be equal to the `name` in the topology.
+            topology_yaml: The containerlab topology as YAML text.
+            reconfigure: True to destroy and deploy a lab that exists.
+        """
+        self._lab_path(name)
+        topology = self._parse_topology(name, topology_yaml)
+        return self._request(
+            "POST",
+            "/api/v1/labs",
+            params={"reconfigure": "true" if reconfigure else "false"},
+            json={"topologyContent": topology},
+        )
+
+    def inspect(self, name):
+        """Return the details of the lab."""
+        return self._request("GET", self._lab_path(name))
+
+    def destroy(self, name):
+        """Destroy the lab and return the server result."""
+        return self._request("DELETE", self._lab_path(name))
 
     def _read_secret(self, secret_type):
         """Return the HTTP(S) secret of this type from the Secrets Group of the host."""
@@ -160,3 +193,45 @@ class ClabApiClient:
             f"Host {self.host}: {method} {path} returned a response that is not JSON.",
             status_code=response.status_code,
         )
+
+    def _lab_path(self, name):
+        """Return the API path of the lab.
+
+        Raises:
+            ClabApiError: If the name does not match the lab name rule of the server.
+        """
+        if not LAB_NAME_PATTERN.match(name):
+            raise ClabApiError(
+                f"Host {self.host}: the lab name {name!r} is not valid. Use 1 to 128 letters, digits, '_', or '-'."
+            )
+        return f"/api/v1/labs/{quote(name, safe='')}"
+
+    def _parse_topology(self, name, topology_yaml):
+        """Return the topology as a mapping that JSON can encode.
+
+        Raises:
+            ClabApiError: If the YAML is not valid, is not a mapping, has another name, or holds a value
+                that JSON cannot encode.
+        """
+        try:
+            topology = yaml.safe_load(topology_yaml)
+        except yaml.YAMLError:
+            topology = None
+            valid_yaml = False
+        else:
+            valid_yaml = True
+        if not valid_yaml:
+            raise ClabApiError(f"Host {self.host}: the topology of lab {name!r} is not valid YAML.")
+        if not isinstance(topology, dict):
+            raise ClabApiError(f"Host {self.host}: the topology of lab {name!r} is not a YAML mapping.")
+        if topology.get("name") != name:
+            raise ClabApiError(
+                f"Host {self.host}: the topology name {topology.get('name')!r} is not equal to the lab name {name!r}."
+            )
+        try:
+            json.dumps(topology, allow_nan=False)
+        except (TypeError, ValueError):
+            pass
+        else:
+            return topology
+        raise ClabApiError(f"Host {self.host}: the topology of lab {name!r} holds a value that JSON cannot encode.")

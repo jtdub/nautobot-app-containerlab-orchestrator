@@ -2,12 +2,15 @@
 
 import json
 import os
+import re
 from unittest import mock
 
 import requests
+import yaml
 from nautobot.apps.choices import SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import TestCase
 
+from containerlab_orchestrator import clab_client
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
 from containerlab_orchestrator.models import ContainerlabHost
 from containerlab_orchestrator.tests.fixtures import (
@@ -128,3 +131,79 @@ class ClabApiClientTestCase(TestCase):
         self.assertEqual(login.url, f"{HOST_URL}/login")
         self.assertEqual(images.url, f"{HOST_URL}/api/v1/images")
         self.assertEqual(images.headers["Authorization"], f"Bearer {TOKEN}")
+
+    def test_methods_send_request_with_bearer_token_and_return_json(self):
+        cases = (
+            ("list_images", (), "GET", "/api/v1/images"),
+            ("inspect", ("lab1",), "GET", "/api/v1/labs/lab1"),
+            ("destroy", ("lab1",), "DELETE", "/api/v1/labs/lab1"),
+        )
+        for method_name, args, method, path in cases:
+            with self.subTest(method=method_name):
+                self.send.reset_mock()
+                self.send.return_value = fake_response(200, {"result": method_name})
+                result = getattr(self.logged_in_client(), method_name)(*args)
+                self.assertEqual(result, {"result": method_name})
+                request = self.sent_requests()[0]
+                self.assertEqual(request.method, method)
+                self.assertEqual(request.url, f"{HOST_URL}{path}")
+                self.assertEqual(request.headers["Authorization"], f"Bearer {TOKEN}")
+                self.assertIsNone(request.body)
+
+    def test_deploy_posts_topology_content_with_reconfigure_false(self):
+        self.send.return_value = fake_response(200, {"lab1": []})
+        self.assertEqual(self.logged_in_client().deploy("lab1", TOPOLOGY_YAML), {"lab1": []})
+        request = self.sent_requests()[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.url, f"{HOST_URL}/api/v1/labs?reconfigure=false")
+        self.assertEqual(request.headers["Authorization"], f"Bearer {TOKEN}")
+        self.assertEqual(json.loads(request.body), {"topologyContent": yaml.safe_load(TOPOLOGY_YAML)})
+
+    def test_deploy_with_reconfigure_sends_reconfigure_true(self):
+        self.send.return_value = fake_response(200, {})
+        self.logged_in_client().deploy("lab1", TOPOLOGY_YAML, reconfigure=True)
+        self.assertEqual(self.sent_requests()[0].url, f"{HOST_URL}/api/v1/labs?reconfigure=true")
+
+    def test_deploy_with_bad_topology_raises_error_before_request(self):
+        cases = {
+            "not valid YAML": "name: [lab1",
+            "a list": "- lab1\n",
+            "a name mismatch": "name: lab2\n",
+            "a date": "name: lab1\ncreated: 2026-01-01\n",
+            "binary": "name: lab1\ndata: !!binary aGVsbG8=\n",
+            "a set": "name: lab1\nitems: !!set {a: null}\n",
+            "nan": "name: lab1\nvalue: .nan\n",
+        }
+        for case, topology_yaml in cases.items():
+            with self.subTest(case=case):
+                with self.assertRaises(ClabApiError) as context:
+                    self.logged_in_client().deploy("lab1", topology_yaml)
+                self.assertIsNone(context.exception.status_code)
+                self.assertIn("lab1", context.exception.message)
+        self.send.assert_not_called()
+
+    def test_invalid_lab_name_raises_error_before_request(self):
+        calls = {
+            "inspect": lambda client, name: client.inspect(name),
+            "destroy": lambda client, name: client.destroy(name),
+            "deploy": lambda client, name: client.deploy(name, f"name: {name!r}\n"),
+        }
+        for method_name, call in calls.items():
+            for name in ("", "a/b", "a b", "a?b", "a" * 129):
+                with self.subTest(method=method_name, name=name):
+                    with self.assertRaises(ClabApiError) as context:
+                        call(ClabApiClient(self.host), name)
+                    self.assertIn("is not valid", context.exception.message)
+        self.send.assert_not_called()
+
+    def test_lab_name_is_quoted_in_path(self):
+        self.send.return_value = fake_response(200, {})
+        with mock.patch.object(clab_client, "LAB_NAME_PATTERN", re.compile(r"^[a-z ]+$")):
+            self.logged_in_client().inspect("a b")
+        self.assertEqual(self.sent_requests()[0].url, f"{HOST_URL}/api/v1/labs/a%20b")
+
+    def test_trailing_slash_in_remote_url_is_removed(self):
+        self.host.remote_url = f"{HOST_URL}/"
+        self.send.return_value = login_response()
+        ClabApiClient(self.host).login()
+        self.assertEqual(self.sent_requests()[0].url, "https://clab01.example.com:8080/login")
