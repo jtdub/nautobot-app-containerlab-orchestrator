@@ -1,0 +1,1 @@
+Added node mappings to the REST API, with filters for Device Type, Platform, kind, and config source.
