@@ -1,9 +1,14 @@
-"""Tests for the ContainerlabHost GraphQL type."""
+"""Tests for the ContainerlabHost and NodeMapping GraphQL types."""
 
 from nautobot.apps.graphql import execute_query
 from nautobot.apps.testing import TestCase
 
-from containerlab_orchestrator.tests.fixtures import SECRET_VALUE, create_containerlab_hosts, patch_secret_variables
+from containerlab_orchestrator.tests.fixtures import (
+    SECRET_VALUE,
+    create_containerlab_hosts,
+    create_node_mappings,
+    patch_secret_variables,
+)
 
 HOSTS_QUERY = """
 query {
@@ -19,6 +24,22 @@ query {
         provider
         parameters
       }
+    }
+  }
+}
+"""
+
+NODE_MAPPINGS_QUERY = """
+query {
+  node_mappings {
+    kind
+    image
+    env
+    device_type {
+      model
+    }
+    platform {
+      name
     }
   }
 }
@@ -57,3 +78,32 @@ class ContainerlabHostGraphQLTestCase(TestCase):
         self.assertIsNone(result.errors)
         self.assertEqual(len(result.data["containerlab_hosts"][0]["secrets_group"]["secrets"]), 2)
         self.assertNotIn(SECRET_VALUE, str(result.data))
+
+
+class NodeMappingGraphQLTestCase(TestCase):
+    """Test the node_mappings GraphQL query."""
+
+    @classmethod
+    def setUpTestData(cls):
+        create_node_mappings()
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping",
+            "dcim.view_devicetype",
+            "dcim.view_platform",
+        )
+
+    def test_query_returns_mappings(self):
+        result = execute_query(NODE_MAPPINGS_QUERY, user=self.user)
+
+        self.assertIsNone(result.errors)
+        mappings = {mapping["kind"]: mapping for mapping in result.data["node_mappings"]}
+        self.assertEqual(set(mappings), {"ceos", "nokia_srlinux", "linux"})
+        self.assertEqual(mappings["ceos"]["image"], "ceos:4.32.0F")
+        self.assertEqual(mappings["ceos"]["env"], {"CLAB_MGMT_VRF": "MGMT"})
+        self.assertEqual(mappings["ceos"]["device_type"], {"model": "DCS-7280"})
+        self.assertIsNone(mappings["ceos"]["platform"])
+        self.assertEqual(mappings["linux"]["platform"], {"name": "linux"})
+        self.assertIsNone(mappings["linux"]["device_type"])

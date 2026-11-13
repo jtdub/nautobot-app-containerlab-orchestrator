@@ -1,0 +1,1 @@
+Added node mappings to GraphQL. A node mapping stores the containerlab kind, image, and node settings for a Device Type or a Platform.
