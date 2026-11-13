@@ -2,9 +2,11 @@
 
 import uuid
 from decimal import Decimal
+from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
+from jinja2 import TemplateError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import ModelTestCases, TestCase
 from nautobot.dcim.models import DeviceType, Manufacturer, Platform
@@ -184,6 +186,9 @@ class NodeMappingModelTestCase(ModelTestCases.BaseModelTestCase):
         self.assertEqual(str(NodeMapping.objects.get(device_type__model="DCS-7280")), "Device Type: Arista DCS-7280")
         self.assertEqual(str(NodeMapping.objects.get(platform__name="linux")), "Platform: linux")
 
+    def test_str_without_target_gives_generic_name(self):
+        self.assertEqual(str(NodeMapping(kind="ceos", image="ceos:4.32.0F")), "Node mapping")
+
     def test_env_help_text_says_values_are_not_secret(self):
         self.assertIn("not secret", NodeMapping._meta.get_field("env").help_text)
 
@@ -193,8 +198,8 @@ class NodeMappingModelTestCase(ModelTestCases.BaseModelTestCase):
         self.assertIn("binds", help_text)
 
 
-class NodeMappingCleanTestCase(TestCase):
-    """Test the validation rules of a node mapping."""
+class NodeMappingValidationTestCase(TestCase):
+    """Base class with the data and the helpers for the node mapping validation tests."""
 
     @classmethod
     def setUpTestData(cls):
@@ -216,6 +221,10 @@ class NodeMappingCleanTestCase(TestCase):
         self.assertIn(field_name, context.exception.message_dict)
         if message is not None:
             self.assertIn(message, context.exception.message_dict[field_name])
+
+
+class NodeMappingCleanTestCase(NodeMappingValidationTestCase):
+    """Test the target, JSON, and node field rules of a node mapping."""
 
     def test_valid_mapping_passes_validation(self):
         self.build_mapping().full_clean()
@@ -283,6 +292,10 @@ class NodeMappingCleanTestCase(TestCase):
             self.build_mapping(memory="512"), "memory", "Enter a number and a unit, for example 512mb or 1Gb."
         )
 
+
+class NodeMappingConfigSourceTestCase(NodeMappingValidationTestCase):
+    """Test the config source and config template rules of a node mapping."""
+
     def test_config_source_defaults_to_lab_default(self):
         self.assertEqual(self.build_mapping().config_source, "")
 
@@ -309,6 +322,11 @@ class NodeMappingCleanTestCase(TestCase):
         self.build_mapping(
             config_source=NodeMappingConfigSourceChoices.NONE, config_template="hostname {{ device.name }}"
         ).full_clean()
+
+    def test_template_error_that_is_not_syntax_error_fails_validation(self):
+        mapping = self.build_mapping(config_template="hostname {{ device.name }}")
+        with mock.patch("containerlab_orchestrator.models.validate_jinja2", side_effect=TemplateError("bad filter")):
+            self.assert_field_error(mapping, "config_template", "Template error: bad filter")
 
 
 class NodeMappingDeleteTestCase(TestCase):
