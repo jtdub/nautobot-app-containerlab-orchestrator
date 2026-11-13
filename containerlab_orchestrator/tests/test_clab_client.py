@@ -207,3 +207,88 @@ class ClabApiClientTestCase(TestCase):
         self.send.return_value = login_response()
         ClabApiClient(self.host).login()
         self.assertEqual(self.sent_requests()[0].url, "https://clab01.example.com:8080/login")
+
+    def test_expired_token_logs_in_once_and_retries_once(self):
+        self.send.side_effect = [fake_response(401, {}), login_response(NEW_TOKEN), fake_response(200, [])]
+        client = self.logged_in_client()
+        self.assertEqual(client.list_images(), [])
+        first, login, retry = self.sent_requests()
+        self.assertEqual(first.headers["Authorization"], f"Bearer {TOKEN}")
+        self.assertEqual(login.url, f"{HOST_URL}/login")
+        self.assertEqual(retry.headers["Authorization"], f"Bearer {NEW_TOKEN}")
+        self.assertEqual(client.token, NEW_TOKEN)
+
+    def test_second_unauthorized_raises_error_without_more_retries(self):
+        self.send.side_effect = [fake_response(401, {}), login_response(NEW_TOKEN), fake_response(401, {})]
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().list_images()
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(self.send.call_count, 3)
+
+    def test_unauthorized_right_after_login_raises_error_without_relogin(self):
+        self.send.side_effect = [login_response(), fake_response(401, {})]
+        with self.assertRaises(ClabApiError) as context:
+            ClabApiClient(self.host).list_images()
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(self.send.call_count, 2)
+
+    def test_http_error_raises_error_with_status_and_server_message(self):
+        self.send.return_value = fake_response(404, {"error": "lab not found"})
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().inspect("lab1")
+        error = context.exception
+        self.assertEqual(error.status_code, 404)
+        self.assertEqual(error.server_message, "lab not found")
+        self.assertIn(HOST_NAME, error.message)
+        self.assertIn("HTTP 404: lab not found", error.message)
+
+    def test_http_error_without_error_text_uses_start_of_body(self):
+        html = "<html>" + "x" * 300
+        cases = ((html, html[:200]), ({"detail": "x"}, '{"detail": "x"}'), ({"error": ""}, '{"error": ""}'))
+        for body, detail in cases:
+            with self.subTest(body=body):
+                self.send.return_value = fake_response(502, body)
+                with self.assertRaises(ClabApiError) as context:
+                    self.logged_in_client().list_images()
+                self.assertTrue(context.exception.message.endswith(f"HTTP 502: {detail}"))
+                self.assertIsNone(context.exception.server_message)
+
+    def test_forbidden_raises_error_without_login_retry(self):
+        self.send.return_value = fake_response(403, {"error": "not the owner"})
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().destroy("lab1")
+        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_success_response_that_is_not_json_raises_error(self):
+        self.send.return_value = fake_response(200, "<html>ok</html>")
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().list_images()
+        self.assertIn("not JSON", context.exception.message)
+        self.assertEqual(context.exception.status_code, 200)
+
+    def test_transport_error_raises_error_with_no_status(self):
+        for error_class in (requests.ConnectionError, requests.ConnectTimeout, requests.exceptions.SSLError):
+            with self.subTest(error=error_class.__name__):
+                self.send.side_effect = error_class("transport failed")
+                with self.assertRaises(ClabApiError) as context:
+                    self.logged_in_client().list_images()
+                error = context.exception
+                self.assertIn(error_class.__name__, error.message)
+                self.assertIsNone(error.status_code)
+                self.assertFalse(error.timed_out)
+                self.assertIsNone(error.__cause__)
+                self.assertIsNone(error.__context__)
+
+    def test_read_timeout_raises_timed_out_error_with_inspect_hint(self):
+        self.send.side_effect = requests.ReadTimeout("read timed out")
+        client = self.logged_in_client()
+        with self.assertRaises(ClabApiError) as context:
+            client.deploy("lab1", TOPOLOGY_YAML)
+        error = context.exception
+        self.assertTrue(error.timed_out)
+        self.assertIsNone(error.status_code)
+        self.assertIn(f"no response came in {client.timeout[1]} seconds", error.message)
+        self.assertIn("Run Inspect", error.message)
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
