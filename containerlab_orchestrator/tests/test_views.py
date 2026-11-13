@@ -1,15 +1,22 @@
-"""Tests for the ContainerlabHost web UI."""
+"""Tests for the containerlab_orchestrator web UI."""
 
 from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
+from nautobot.dcim.models import DeviceType, Manufacturer, Platform
 
-from containerlab_orchestrator.models import ContainerlabHost
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_http_secrets_group
+from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
+from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.tests.fixtures import (
+    create_containerlab_hosts,
+    create_http_secrets_group,
+    create_node_mappings,
+)
 
 HOST_LIST_URL_NAME = "plugins:containerlab_orchestrator:containerlabhost_list"
+NODE_MAPPING_LIST_URL_NAME = "plugins:containerlab_orchestrator:nodemapping_list"
 
 
 class ContainerlabHostViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disable=too-many-ancestors
@@ -126,3 +133,132 @@ class ContainerlabHostDiscoveryTestCase(TestCase):
 
         self.assertContains(response, host.get_absolute_url())
         self.assertNotContains(response, ContainerlabHost.objects.get(name="clab01").get_absolute_url())
+
+
+class NodeMappingViewTestCase(  # pylint: disable=too-many-ancestors
+    ViewTestCases.GetObjectViewTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.GetObjectNotesViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+    ViewTestCases.ListObjectsViewTestCase,
+    ViewTestCases.BulkEditObjectsViewTestCase,
+    ViewTestCases.BulkDeleteObjectsViewTestCase,
+):
+    """Run the generic Nautobot UI view tests on NodeMapping.
+
+    The list leaves out the bulk rename tests of PrimaryObjectViewTestCase. Their setUp skips every test of a model
+    with no name field, and NodeMapping has no name field.
+    """
+
+    model = NodeMapping
+
+    @classmethod
+    def setUpTestData(cls):
+        create_node_mappings()
+        device_type = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v")
+        cls.form_data = {
+            "device_type": device_type.pk,
+            "kind": "ceos",
+            "image": "ceos:4.32.0F",
+            "env": '{"A": "1"}',
+            "overrides": "{}",
+        }
+        cls.update_data = {**cls.form_data, "image": "ceos:4.33.0F"}
+        cls.bulk_edit_data = {"image": "ceos:4.34.0F", "config_source": NodeMappingConfigSourceChoices.NONE}
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_detail_page_says_env_is_not_secret(self):
+        self.add_permissions("containerlab_orchestrator.view_nodemapping")
+        mapping = NodeMapping.objects.get(device_type__model="DCS-7280")
+
+        response = self.client.get(mapping.get_absolute_url())
+
+        self.assertBodyContains(response, "ENVIRONMENT VARIABLES (NOT SECRET)")
+        self.assertBodyContains(response, "CLAB_MGMT_VRF")
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_list_shows_config_source_label(self):
+        self.add_permissions("containerlab_orchestrator.view_nodemapping")
+
+        response = self.client.get(self._get_url("list"), headers={"HX-Request": "true"})
+
+        self.assertBodyContains(response, "None (kind default)")
+
+
+class NodeMappingBulkEditJobTestCase(TransactionTestCase):
+    """Run the bulk edit system job on NodeMapping.
+
+    The job writes its log through a second database connection, so this test commits its data.
+    """
+
+    def setUp(self):
+        super().setUp()
+        create_node_mappings()
+
+    def test_bulk_edit_clears_config_source_to_lab_default(self):
+        mapping = NodeMapping.objects.get(device_type__model="7220 IXR-D3")
+
+        job_result = create_job_result_and_run_job(
+            "nautobot.core.jobs.bulk_actions",
+            "BulkEditObjects",
+            content_type=ContentType.objects.get_for_model(NodeMapping).pk,
+            edit_all=False,
+            filter_query_params={},
+            pk_list=[str(mapping.pk)],
+            form_data={"pk": [str(mapping.pk)], "_nullify": ["config_source"]},
+        )
+
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_SUCCESS)
+        mapping.refresh_from_db()
+        self.assertEqual(mapping.config_source, "")
+
+
+class NodeMappingImportJobTestCase(TransactionTestCase):
+    """Run the CSV import system job on NodeMapping.
+
+    The job writes its log through a second database connection, so this test commits its data.
+    """
+
+    def test_csv_import_creates_platform_mappings_with_env(self):
+        csv_data = "\n".join(
+            (
+                "platform,kind,image,env",
+                'csv-platform-1,linux,alpine:3.20,"{""A"": ""1""}"',
+                'csv-platform-2,linux,alpine:3.21,"{""B"": ""2""}"',
+                'csv-platform-3,linux,alpine:3.22,"{""C"": ""3""}"',
+            )
+        )
+        for number in range(1, 4):
+            Platform.objects.create(name=f"csv-platform-{number}")
+
+        job_result = create_job_result_and_run_job(
+            "nautobot.core.jobs",
+            "ImportObjects",
+            content_type=ContentType.objects.get_for_model(NodeMapping).pk,
+            csv_data=csv_data,
+        )
+
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_SUCCESS)
+        self.assertEqual(NodeMapping.objects.get(platform__name="csv-platform-2").env, {"B": "2"})
+        self.assertEqual(NodeMapping.objects.filter(platform__name__startswith="csv-platform-").count(), 3)
+
+
+class NodeMappingDiscoveryTestCase(TestCase):
+    """Test that a user finds the node mappings through the menu."""
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_navigation_menu_has_node_mappings_item(self):
+        self.add_permissions("containerlab_orchestrator.view_nodemapping")
+
+        response = self.client.get(reverse("home"))
+
+        self.assertContains(response, "Node Mappings")
+        self.assertContains(response, f'href="{reverse(NODE_MAPPING_LIST_URL_NAME)}"')
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_navigation_menu_hides_node_mappings_item_without_permission(self):
+        response = self.client.get(reverse("home"))
+
+        self.assertNotContains(response, f'href="{reverse(NODE_MAPPING_LIST_URL_NAME)}"')
