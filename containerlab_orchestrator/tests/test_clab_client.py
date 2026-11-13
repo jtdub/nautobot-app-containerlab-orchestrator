@@ -43,7 +43,7 @@ def login_response(token=TOKEN):
     return fake_response(200, {"token": token})
 
 
-class ClabApiClientTestCase(TestCase):
+class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-methods
     """Test ClabApiClient against a mocked transport."""
 
     def setUp(self):
@@ -296,7 +296,10 @@ class ClabApiClientTestCase(TestCase):
 
     def test_requests_use_verify_ssl_of_host(self):
         for verify_ssl in (True, False):
-            with self.subTest(verify_ssl=verify_ssl), mock.patch.dict(os.environ, {"REQUESTS_CA_BUNDLE": "/tmp/ca.pem"}):
+            with (
+                self.subTest(verify_ssl=verify_ssl),
+                mock.patch.dict(os.environ, {"REQUESTS_CA_BUNDLE": "/tmp/ca.pem"}),
+            ):
                 self.host.verify_ssl = verify_ssl
                 self.send.return_value = fake_response(200, [])
                 self.logged_in_client().list_images()

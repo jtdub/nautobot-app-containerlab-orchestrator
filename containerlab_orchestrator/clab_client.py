@@ -130,20 +130,18 @@ class ClabApiClient:
         Raises:
             ClabApiError: If no response came. The error does not chain the transport exception.
         """
-        timed_out = False
+        failure = None
         try:
             return self.session.request(method, f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
-        except requests.ReadTimeout:
-            timed_out = True
         except requests.RequestException as error:
-            failure = type(error).__name__
-        if timed_out:
+            failure = error
+        if isinstance(failure, requests.ReadTimeout):
             raise ClabApiError(
                 f"Host {self.host}: {method} {path} was sent, but no response came in {self.timeout[1]} seconds. "
                 "The lab state is unknown. Run Inspect.",
                 timed_out=True,
             )
-        raise ClabApiError(f"Host {self.host}: cannot reach {self.base_url}: {failure}.")
+        raise ClabApiError(f"Host {self.host}: cannot reach {self.base_url}: {type(failure).__name__}.")
 
     def _request(self, method, path, **kwargs):
         """Send an authenticated request and return the parsed JSON.
@@ -167,9 +165,8 @@ class ClabApiClient:
             body = response.json()
         except ValueError:
             return None
-        if isinstance(body, dict) and isinstance(body.get("error"), str) and body["error"]:
-            return body["error"]
-        return None
+        error = body.get("error") if isinstance(body, dict) else None
+        return error if isinstance(error, str) and error else None
 
     def _raise_for_status(self, response, method, path):
         """Raise ClabApiError when the response has an HTTP error status."""
@@ -213,13 +210,13 @@ class ClabApiClient:
             ClabApiError: If the YAML is not valid, is not a mapping, has another name, or holds a value
                 that JSON cannot encode.
         """
+        topology = None
+        valid_yaml = False
         try:
             topology = yaml.safe_load(topology_yaml)
-        except yaml.YAMLError:
-            topology = None
-            valid_yaml = False
-        else:
             valid_yaml = True
+        except yaml.YAMLError:
+            pass
         if not valid_yaml:
             raise ClabApiError(f"Host {self.host}: the topology of lab {name!r} is not valid YAML.")
         if not isinstance(topology, dict):
