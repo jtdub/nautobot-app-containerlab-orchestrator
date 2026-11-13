@@ -166,6 +166,8 @@ class NodeMappingViewTestCase(  # pylint: disable=too-many-ancestors
             "image": "ceos:4.32.0F",
             "env": '{"A": "1"}',
             "overrides": "{}",
+            "config_source": NodeMappingConfigSourceChoices.NONE,
+            "config_template": "",
         }
         cls.update_data = {**cls.form_data, "image": "ceos:4.33.0F"}
         cls.bulk_edit_data = {"image": "ceos:4.34.0F", "config_source": NodeMappingConfigSourceChoices.NONE}

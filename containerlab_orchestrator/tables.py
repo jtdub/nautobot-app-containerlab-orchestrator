@@ -1,13 +1,7 @@
 """Tables for the containerlab_orchestrator app."""
 
 import django_tables2 as tables
-from nautobot.apps.tables import (
-    BaseTable,
-    BooleanColumn,
-    ButtonsColumn,
-    TagColumn,
-    ToggleColumn,
-)
+from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, TagColumn, ToggleColumn
 
 from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
 
