@@ -1,14 +1,16 @@
 """Tests for the REST API of the app."""
 
+from django.test import override_settings
 from nautobot.apps.testing import APIViewTestCases
 from nautobot.dcim.models import DeviceType, Manufacturer, Platform
 from rest_framework import status
 
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
     create_containerlab_hosts,
     create_http_secrets_group,
+    create_interface_mappings,
     create_node_mappings,
     patch_secret_variables,
 )
@@ -143,3 +145,76 @@ class NodeMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disab
         for data in ({"config_source": "jinja2"}, {"config_template": "{% if %}"}):
             with self.subTest(data=data):
                 self.assertIn("config_template", self._post_invalid(**data))
+
+
+class InterfaceMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot REST API tests and the validation tests on InterfaceMapping."""
+
+    model = InterfaceMapping
+    choices_fields = ()
+
+    @classmethod
+    def setUpTestData(cls):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        cls.arista, cls.nokia, _ = node_mappings
+        cls.create_data = [
+            {"node_mapping": cls.nokia.pk, "physical_name": f"ethernet-1/{number}", "container_name": f"e1-{number}"}
+            for number in range(1, 4)
+        ]
+        cls.update_data = {"container_name": "e1-9"}
+
+    def _post_invalid(self, **data):
+        """POST a row on the Arista mapping and return the errors of the HTTP 400 response."""
+        self.add_permissions(
+            "containerlab_orchestrator.add_interfacemapping", "containerlab_orchestrator.view_nodemapping"
+        )
+        payload = {"node_mapping": self.arista.pk, "physical_name": "GigabitEthernet0/3", "container_name": "eth3"}
+        payload.update(data)
+        before = InterfaceMapping.objects.count()
+        response = self.client.post(self._get_list_url(), payload, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(InterfaceMapping.objects.count(), before)
+        return response.data
+
+    def test_duplicate_physical_name_returns_400(self):
+        errors = self._post_invalid(physical_name="GigabitEthernet0/1")
+        self.assertEqual(list(errors), ["__all__"])
+
+    def test_duplicate_container_name_returns_400(self):
+        errors = self._post_invalid(container_name="eth1")
+        self.assertEqual(list(errors), ["__all__"])
+
+    def test_bad_container_name_returns_400(self):
+        self.assertIn("container_name", self._post_invalid(container_name="eth 1"))
+
+    def test_get_absolute_url_for_api_gives_row_url(self):
+        row = InterfaceMapping.objects.get(physical_name="ens3")
+        self.assertEqual(row.get_absolute_url(api=True), self._get_detail_url(row))
+
+    def test_list_hides_ordering_field(self):
+        self.add_permissions("containerlab_orchestrator.view_interfacemapping")
+        response = self.client.get(self._get_list_url(), **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        self.assertNotIn("_physical_name", response.data["results"][0])
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_recreate_platform_row_from_csv(self):
+        self.add_permissions(
+            "containerlab_orchestrator.add_interfacemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+        row = InterfaceMapping.objects.get(physical_name="ens3")
+        platform_mapping = row.node_mapping
+        response = self.client.get(f"{self._get_detail_url(row)}?format=csv", **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        csv_data = response.content.decode(response.charset)
+        row.delete()
+
+        response = self.client.post(self._get_list_url(), csv_data, content_type="text/csv", **self.header)
+
+        self.assertHttpStatus(response, status.HTTP_201_CREATED, csv_data)
+        new_row = InterfaceMapping.objects.get(pk=response.data[0]["id"])
+        self.assertEqual(
+            (new_row.node_mapping, new_row.physical_name, new_row.container_name),
+            (platform_mapping, "ens3", "eth1"),
+        )
