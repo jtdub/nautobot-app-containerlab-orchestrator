@@ -477,13 +477,13 @@ class InterfaceMappingDeleteTestCase(TestCase):
         self.assertEqual(InterfaceMapping.objects.count(), 3)
 
 
-def create_lab_test_data(test_class):
-    """Save the hosts, the lab devices, the labs, and the lab nodes, and keep them on the test class."""
-    test_class.hosts = create_containerlab_hosts()
-    test_class.lab_devices = create_lab_devices()
-    test_class.labs = create_labs(test_class.hosts, test_class.lab_devices)
-    test_class.lab_nodes = create_lab_nodes(test_class.labs, test_class.lab_devices)
-    test_class.planned = Status.objects.get(name=LabStatusChoices.PLANNED)
+def create_lab_test_data():
+    """Return the saved hosts, lab devices, labs, and lab nodes, and the Planned status."""
+    hosts = create_containerlab_hosts()
+    lab_devices = create_lab_devices()
+    labs = create_labs(hosts, lab_devices)
+    lab_nodes = create_lab_nodes(labs, lab_devices)
+    return hosts, lab_devices, labs, lab_nodes, Status.objects.get(name=LabStatusChoices.PLANNED)
 
 
 class LabTestCase(TestCase):
@@ -491,7 +491,7 @@ class LabTestCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        create_lab_test_data(cls)
+        cls.hosts, cls.lab_devices, cls.labs, cls.lab_nodes, cls.planned = create_lab_test_data()
 
 
 class LabModelTestCase(ModelTestCases.BaseModelTestCase):
@@ -501,7 +501,7 @@ class LabModelTestCase(ModelTestCases.BaseModelTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        create_lab_test_data(cls)
+        cls.hosts, cls.lab_devices, cls.labs, cls.lab_nodes, cls.planned = create_lab_test_data()
 
     def test_get_docs_url(self):
         """Skip the documentation check, because issue #25 adds the lab documentation page."""
@@ -531,7 +531,7 @@ class LabValidationTestCase(LabTestCase):
         self.assertEqual(context.exception.message_dict, errors)
 
 
-class LabNameCleanTestCase(LabValidationTestCase):
+class LabNameCleanTestCase(LabValidationTestCase):  # pylint: disable=too-many-ancestors
     """Test the unique name check of a lab."""
 
     def test_duplicate_name_on_same_host_fails_validation(self):
@@ -548,7 +548,7 @@ class LabNameCleanTestCase(LabValidationTestCase):
         lab.full_clean()
 
 
-class LabSelectionCleanTestCase(LabValidationTestCase):
+class LabSelectionCleanTestCase(LabValidationTestCase):  # pylint: disable=too-many-ancestors
     """Test the validation of the selection and the subnet room of a lab."""
 
     def test_device_filter_that_is_not_object_fails_validation(self):
@@ -653,7 +653,7 @@ class LabNodeModelTestCase(ModelTestCases.BaseModelTestCase):
 
     @classmethod
     def setUpTestData(cls):
-        create_lab_test_data(cls)
+        cls.hosts, cls.lab_devices, cls.labs, cls.lab_nodes, cls.planned = create_lab_test_data()
 
     def test_get_docs_url(self):
         """Skip the documentation check, because issue #25 adds the lab documentation page."""
