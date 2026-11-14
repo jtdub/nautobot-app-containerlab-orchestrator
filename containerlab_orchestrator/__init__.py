@@ -23,7 +23,7 @@ class ContainerlabOrchestratorConfig(NautobotAppConfig):
         "request_timeout": 300,
     }
     docs_view_name = "plugins:containerlab_orchestrator:docs"
-    searchable_models = ["containerlabhost"]
+    searchable_models = ["containerlabhost", "lab"]
 
 
 config = ContainerlabOrchestratorConfig  # pylint:disable=invalid-name

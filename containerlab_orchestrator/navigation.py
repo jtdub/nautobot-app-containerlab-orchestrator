@@ -16,6 +16,23 @@ menu_items = (
         icon=NavigationIconChoices.DESIGN,
         groups=(
             NavMenuGroup(
+                name="Labs",
+                weight=50,
+                items=(
+                    NavMenuItem(
+                        link="plugins:containerlab_orchestrator:lab_list",
+                        name="Labs",
+                        permissions=["containerlab_orchestrator.view_lab"],
+                        buttons=(
+                            NavMenuAddButton(
+                                link="plugins:containerlab_orchestrator:lab_add",
+                                permissions=["containerlab_orchestrator.add_lab"],
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            NavMenuGroup(
                 name="Hosts",
                 weight=100,
                 items=(
