@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from nautobot.apps.config import get_app_settings_or_config
+from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
+from nautobot.apps.models import naturalize_interface
 
 from containerlab_orchestrator.constants import APP_NAME
 from containerlab_orchestrator.models import InterfaceMapping, NodeMapping
@@ -12,6 +14,9 @@ from containerlab_orchestrator.validators import validate_clab_kind, validate_im
 
 DEFAULT_MAPPING_KEYS = ("kind", "image")
 """The keys that the default_node_mapping setting holds."""
+
+FALLBACK_INTERFACE_PREFIX = "eth"
+"""The prefix of a fallback name. eth0 is the management interface, so the numbers start at 1."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -80,3 +85,62 @@ def resolve_mapping(device):
     if mapping is None and device.platform_id is not None:
         mapping = mappings.filter(platform_id=device.platform_id).first()
     return mapping or _default_mapping()
+
+
+def _sort_key(interface):
+    """Return the key that puts interfaces in natural order, with a device interface before a module interface."""
+    return (
+        naturalize_interface(interface.name, CHARFIELD_MAX_LENGTH),
+        interface.name,
+        interface.module_id is not None,
+        str(interface.pk),
+    )
+
+
+def map_interfaces(mapping, interfaces):
+    """Return the container name of each interface and a list of warnings.
+
+    Give the interfaces of one device that the caller links. The function does not leave out mgmt_only, virtual,
+    or LAG interfaces. An interface that the table does not hold gets the next free ethN name, and a second
+    interface with the same name gets no container name.
+
+    Returns:
+        A dict of each Interface to its container name, in natural order of the names, and the warnings.
+
+    Raises:
+        ValueError: If the interfaces belong to more than one device, or an interface has no device.
+    """
+    ordered = sorted(interfaces, key=_sort_key)
+    if not ordered:
+        return {}, []
+    devices = {interface.parent for interface in ordered}
+    if None in devices or len(devices) > 1:
+        raise ValueError("map_interfaces needs the interfaces of one device.")
+    (device,) = devices
+    table = {row.physical_name: row.container_name for row in mapping.interface_mappings.all()}
+    used_names = set(table.values())
+    seen_names = set()
+    number = 1
+    container_names = {}
+    warnings = []
+    for interface in ordered:
+        if interface.name in seen_names:
+            warnings.append(
+                f"Device {device}, interface {interface.name} (id {interface.pk}): another interface of the device "
+                "has the same name. This interface gets no container name."
+            )
+            continue
+        seen_names.add(interface.name)
+        if interface.name in table:
+            container_names[interface] = table[interface.name]
+            continue
+        while f"{FALLBACK_INTERFACE_PREFIX}{number}" in used_names:
+            number += 1
+        fallback = f"{FALLBACK_INTERFACE_PREFIX}{number}"
+        used_names.add(fallback)
+        container_names[interface] = fallback
+        warnings.append(
+            f"Device {device}, interface {interface.name}: the interface table has no row. "
+            f"The {mapping.kind} node uses {fallback}. Mapping: {mapping}."
+        )
+    return container_names, warnings
