@@ -2,13 +2,22 @@
 
 from decimal import Decimal
 
-from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 from jinja2 import TemplateError, TemplateSyntaxError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
-from nautobot.apps.models import LaxURLField, PrimaryModel, extras_features
+from nautobot.apps.models import (
+    BaseModel,
+    ChangeLoggedModel,
+    CollateAsChar,
+    LaxURLField,
+    NaturalOrderingField,
+    PrimaryModel,
+    extras_features,
+    naturalize_interface,
+)
 from nautobot.apps.utils import validate_jinja2
 from nautobot.extras.models import SecretsGroup, SecretsGroupAssociation
 
@@ -18,9 +27,11 @@ from containerlab_orchestrator.validators import (
     validate_clab_api_url,
     validate_clab_kind,
     validate_clab_memory,
+    validate_container_interface_name,
     validate_image_reference,
     validate_json_object,
     validate_string_map,
+    validate_trimmed_name,
 )
 
 
@@ -201,3 +212,69 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
                 errors["config_template"] = [f"Template error: {error}"]
         if errors:
             raise ValidationError(errors)
+
+
+@extras_features("graphql")
+class InterfaceMapping(BaseModel, ChangeLoggedModel):
+    """One physical interface name of a node mapping and the container interface name that takes its place."""
+
+    node_mapping = models.ForeignKey(
+        to="containerlab_orchestrator.NodeMapping",
+        on_delete=models.CASCADE,
+        related_name="interface_mappings",
+    )
+    physical_name = models.CharField(
+        max_length=CHARFIELD_MAX_LENGTH,
+        validators=[validate_trimmed_name],
+        verbose_name="Physical name",
+        help_text="The interface name on the device, for example GigabitEthernet0/0/1.",
+    )
+    _physical_name = NaturalOrderingField(
+        target_field="physical_name",
+        naturalize_function=naturalize_interface,
+        max_length=CHARFIELD_MAX_LENGTH,
+        blank=True,
+        db_index=True,
+    )
+    container_name = models.CharField(
+        max_length=CHARFIELD_MAX_LENGTH,
+        validators=[validate_container_interface_name],
+        verbose_name="Container name",
+        help_text="The interface name in the containerlab node, for example eth1 or Ethernet1.",
+    )
+
+    class Meta:
+        """Meta attributes for InterfaceMapping."""
+
+        ordering = ("node_mapping", CollateAsChar("_physical_name"))
+        verbose_name = "Interface mapping"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["node_mapping", "physical_name"],
+                name="containerlab_orchestrator_interfacemapping_physical_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["node_mapping", "container_name"],
+                name="containerlab_orchestrator_interfacemapping_container_unique",
+            ),
+        ]
+
+    def __str__(self):
+        """Return the physical name and the container name."""
+        return f"{self.physical_name} → {self.container_name}"
+
+    def get_absolute_url(self, api=False):
+        """Return the REST API URL of the row, or the node mapping page, because a row has no page of its own."""
+        if api:
+            return super().get_absolute_url(api=True)
+        return self.node_mapping.get_absolute_url()
+
+    def to_objectchange(self, action, **kwargs):
+        """Return a new ObjectChange that relates the row change to its node mapping, if the mapping still exists."""
+        if "related_object" in kwargs:
+            return super().to_objectchange(action, **kwargs)
+        try:
+            node_mapping = self.node_mapping
+        except ObjectDoesNotExist:
+            node_mapping = None
+        return super().to_objectchange(action, related_object=node_mapping, **kwargs)

@@ -9,7 +9,7 @@ from nautobot.extras.models import Secret, SecretsGroup, SecretsGroupAssociation
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 
 SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the REST API and GraphQL must never return."""
@@ -96,4 +96,19 @@ def create_node_mappings():
             config_source=NodeMappingConfigSourceChoices.JINJA2,
             config_template="hostname {{ device.name }}",
         ),
+    ]
+
+
+def create_interface_mappings(node_mappings):
+    """Return saved interface rows: three on the Arista mapping and one on the linux Platform mapping."""
+    arista, _, linux = node_mappings
+    pairs = (
+        (arista, "GigabitEthernet0/1", "eth1"),
+        (arista, "GigabitEthernet0/2", "eth2"),
+        (arista, "GigabitEthernet0/10", "eth10"),
+        (linux, "ens3", "eth1"),
+    )
+    return [
+        InterfaceMapping.objects.create(node_mapping=node_mapping, physical_name=physical, container_name=container)
+        for node_mapping, physical, container in pairs
     ]

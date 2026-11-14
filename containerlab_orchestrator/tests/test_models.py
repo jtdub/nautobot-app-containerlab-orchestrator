@@ -1,4 +1,4 @@
-"""Tests for the ContainerlabHost and NodeMapping models."""
+"""Tests for the ContainerlabHost, NodeMapping, and InterfaceMapping models."""
 
 import uuid
 from decimal import Decimal
@@ -14,10 +14,11 @@ from nautobot.dcim.models import DeviceType, Manufacturer, Platform
 from nautobot.extras.models import Secret, SecretsGroupAssociation
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_http_secrets_group,
+    create_interface_mappings,
     create_node_mappings,
 )
 
@@ -356,3 +357,115 @@ class NodeMappingDeleteTestCase(TestCase):
             device_type.delete()
             platform.delete()
         self.assertFalse(NodeMapping.objects.exists())
+
+
+class InterfaceMappingModelTestCase(ModelTestCases.BaseModelTestCase):
+    """Run the generic Nautobot model tests on InterfaceMapping."""
+
+    model = InterfaceMapping
+
+    @classmethod
+    def setUpTestData(cls):
+        create_interface_mappings(create_node_mappings())
+
+    def test_get_docs_url(self):
+        """Skip the documentation check, because issue #25 adds the interface mapping documentation page."""
+        self.skipTest("The documentation page for this model comes in #25.")
+
+    def test_natural_key_and_composite_key_round_trip_for_device_type_and_platform_rows(self):
+        for row in (
+            InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1"),
+            InterfaceMapping.objects.get(physical_name="ens3"),
+        ):
+            with self.subTest(row=str(row)):
+                self.assertEqual(InterfaceMapping.objects.get_by_natural_key(*row.natural_key()), row)
+                self.assertEqual(InterfaceMapping.objects.get(composite_key=row.composite_key), row)
+
+    def test_rows_use_natural_interface_order(self):
+        rows = InterfaceMapping.objects.filter(node_mapping__device_type__model="DCS-7280")
+        self.assertEqual(
+            [row.physical_name for row in rows],
+            ["GigabitEthernet0/1", "GigabitEthernet0/2", "GigabitEthernet0/10"],
+        )
+
+    def test_str_shows_physical_and_container_name(self):
+        row = InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1")
+        self.assertEqual(str(row), "GigabitEthernet0/1 → eth1")
+
+    def test_to_objectchange_relates_change_to_node_mapping(self):
+        row = InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1")
+        self.assertEqual(row.to_objectchange("update").related_object, row.node_mapping)
+
+    def test_to_objectchange_keeps_related_object_that_caller_gives(self):
+        row = InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1")
+        self.assertIsNone(row.to_objectchange("update", related_object=None).related_object)
+
+    def test_to_objectchange_without_node_mapping_has_no_related_object(self):
+        row = InterfaceMapping(node_mapping_id=uuid.uuid4(), physical_name="Gi0/9", container_name="eth9")
+        self.assertIsNone(row.to_objectchange("delete").related_object)
+
+    def test_get_absolute_url_opens_node_mapping(self):
+        row = InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1")
+        self.assertEqual(row.get_absolute_url(), row.node_mapping.get_absolute_url())
+
+
+class InterfaceMappingValidationTestCase(TestCase):
+    """Test the name rules of an interface row."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.arista, cls.nokia, _ = create_node_mappings()
+        InterfaceMapping.objects.create(node_mapping=cls.arista, physical_name="Ethernet1", container_name="eth1")
+
+    def assert_error(self, row, key):
+        """Assert that full_clean() reports an error under the key."""
+        with self.assertRaises(ValidationError) as context:
+            row.full_clean()
+        self.assertIn(key, context.exception.message_dict)
+
+    def test_duplicate_physical_name_in_one_mapping_fails_validation(self):
+        row = InterfaceMapping(node_mapping=self.arista, physical_name="Ethernet1", container_name="eth2")
+        self.assert_error(row, "__all__")
+
+    def test_duplicate_container_name_in_one_mapping_fails_validation(self):
+        row = InterfaceMapping(node_mapping=self.arista, physical_name="Ethernet2", container_name="eth1")
+        self.assert_error(row, "__all__")
+
+    def test_same_names_on_two_mappings_pass(self):
+        InterfaceMapping(node_mapping=self.nokia, physical_name="Ethernet1", container_name="eth1").validated_save()
+
+    def test_empty_names_fail_validation(self):
+        for field_name in ("physical_name", "container_name"):
+            with self.subTest(field_name=field_name):
+                values = {"node_mapping": self.nokia, "physical_name": "Ethernet9", "container_name": "eth9"}
+                values[field_name] = ""
+                self.assert_error(InterfaceMapping(**values), field_name)
+
+    def test_bad_names_fail_validation(self):
+        for field_name, value in (("physical_name", "Ethernet9 "), ("container_name", "eth 9")):
+            with self.subTest(field_name=field_name):
+                values = {"node_mapping": self.nokia, "physical_name": "Ethernet9", "container_name": "eth9"}
+                values[field_name] = value
+                self.assert_error(InterfaceMapping(**values), field_name)
+
+
+class InterfaceMappingDeleteTestCase(TestCase):
+    """Test that the rows go away with their node mapping, Device Type, or Platform."""
+
+    @classmethod
+    def setUpTestData(cls):
+        create_interface_mappings(create_node_mappings())
+
+    def test_delete_node_mapping_deletes_rows(self):
+        NodeMapping.objects.get(device_type__model="DCS-7280").delete()
+        self.assertFalse(InterfaceMapping.objects.filter(physical_name__startswith="GigabitEthernet").exists())
+        self.assertTrue(InterfaceMapping.objects.filter(physical_name="ens3").exists())
+
+    def test_delete_device_type_deletes_rows(self):
+        DeviceType.objects.get(model="DCS-7280").delete()
+        self.assertEqual(list(InterfaceMapping.objects.values_list("physical_name", flat=True)), ["ens3"])
+
+    def test_delete_platform_deletes_rows(self):
+        Platform.objects.get(name="linux").delete()
+        self.assertFalse(InterfaceMapping.objects.filter(physical_name="ens3").exists())
+        self.assertEqual(InterfaceMapping.objects.count(), 3)
