@@ -745,12 +745,13 @@ class LabViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disab
             "mgmt_subnet": "192.168.70.0/24",
             "config_source": NodeMappingConfigSourceChoices.NONE,
         }
+        lab_count = Lab.objects.count()
 
         response = self.client.post(self._get_url("add"), data)
 
         self.assertHttpStatus(response, 200)
         self.assertBodyContains(response, DUPLICATE_LAB_NAME_MESSAGE)
-        self.assertFalse(Lab.objects.filter(name="LAB-A").exists())
+        self.assertEqual(Lab.objects.count(), lab_count)
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_detail_page_shows_lab_fields(self):
