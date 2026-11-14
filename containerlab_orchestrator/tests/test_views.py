@@ -334,8 +334,9 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.arista, cls.nokia, cls.linux = create_node_mappings()
-        create_interface_mappings([cls.arista, cls.nokia, cls.linux])
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        cls.arista, cls.nokia, _ = node_mappings
 
     def setUp(self):
         super().setUp()
@@ -482,3 +483,54 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
             object_repr="GigabitEthernet0/3 → eth4",
         )
         self.assertHttpStatus(self.client.get(row_change.get_absolute_url()), 200)
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class NodeMappingInterfacePanelTestCase(TestCase):
+    """Test the Interface Mappings panel on the node mapping detail page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        cls.arista = node_mappings[0]
+
+    def get_detail_page(self):
+        """Return the response of the Arista node mapping detail page."""
+        return self.client.get(self.arista.get_absolute_url())
+
+    def test_panel_shows_rows_and_edit_button_with_change_permission(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping",
+            "containerlab_orchestrator.view_interfacemapping",
+            "containerlab_orchestrator.change_nodemapping",
+        )
+
+        response = self.get_detail_page()
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertBodyContains(response, "GigabitEthernet0/10")
+        self.assertBodyContains(response, "eth10")
+        self.assertBodyContains(response, "Edit interfaces")
+        self.assertBodyContains(
+            response, reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.arista.pk})
+        )
+
+    def test_panel_hides_edit_button_without_change_permission(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.get_detail_page()
+
+        self.assertBodyContains(response, "GigabitEthernet0/10")
+        self.assertNotContains(response, "Edit interfaces")
+
+    def test_panel_hides_rows_without_interface_view_permission(self):
+        self.add_permissions("containerlab_orchestrator.view_nodemapping")
+
+        response = self.get_detail_page()
+
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertNotContains(response, "GigabitEthernet0/10")

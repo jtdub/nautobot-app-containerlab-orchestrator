@@ -2,7 +2,14 @@
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from nautobot.apps.ui import ObjectDetailContent, ObjectFieldsPanel, ObjectTextPanel, SectionChoices
+from nautobot.apps.ui import (
+    Button,
+    ObjectDetailContent,
+    ObjectFieldsPanel,
+    ObjectsTablePanel,
+    ObjectTextPanel,
+    SectionChoices,
+)
 from nautobot.apps.views import NautobotUIViewSet
 
 from containerlab_orchestrator import filters, forms, models, tables
@@ -55,6 +62,25 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
                 weight=100,
                 section=SectionChoices.LEFT_HALF,
                 fields=["device_type", "platform", "kind", "image", "node_type", "cpu", "memory", "config_source"],
+            ),
+            ObjectsTablePanel(
+                weight=200,
+                section=SectionChoices.LEFT_HALF,
+                table_class=tables.InterfaceMappingTable,
+                table_filter="node_mapping",
+                table_title="Interface Mappings",
+                add_button_route=None,
+                enable_related_link=False,
+                show_table_config_button=False,
+                footer_buttons=(
+                    Button(
+                        weight=100,
+                        label="Edit interfaces",
+                        icon="mdi-pencil",
+                        link_name="plugins:containerlab_orchestrator:nodemapping_edit",
+                        required_permissions=["containerlab_orchestrator.change_nodemapping"],
+                    ),
+                ),
             ),
             ObjectTextPanel(
                 weight=100,

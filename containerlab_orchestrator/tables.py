@@ -3,7 +3,7 @@
 import django_tables2 as tables
 from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, TagColumn, ToggleColumn
 
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 
 
 class ContainerlabHostTable(BaseTable):
@@ -55,3 +55,16 @@ class NodeMappingTable(BaseTable):
             "actions",
         )
         default_columns = ("pk", "device_type", "platform", "kind", "image", "node_type", "config_source", "actions")
+
+
+class InterfaceMappingTable(BaseTable):
+    """Table of the interface rows of a node mapping."""
+
+    physical_name = tables.Column()
+    container_name = tables.Column()
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for InterfaceMappingTable."""
+
+        model = InterfaceMapping
+        fields = ("physical_name", "container_name")
