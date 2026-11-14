@@ -7,6 +7,7 @@ import unittest
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
@@ -14,7 +15,7 @@ from nautobot.dcim.models import DeviceType, Manufacturer, Platform
 from nautobot.extras.models import ObjectChange, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tables import InterfaceMappingTable
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
@@ -37,6 +38,12 @@ NODE_MAPPING_EDIT_PERMISSIONS = (
     "containerlab_orchestrator.change_nodemapping",
     "containerlab_orchestrator.view_nodemapping",
     "dcim.view_devicetype",
+)
+LAB_DETAIL_PERMISSIONS = (
+    "containerlab_orchestrator.view_lab",
+    "containerlab_orchestrator.view_labnode",
+    "dcim.view_device",
+    "extras.view_dynamicgroup",
 )
 
 
@@ -837,3 +844,89 @@ class LabDiscoveryTestCase(TestCase):
         self.assertContains(response, lab_b.get_absolute_url())
         self.assertNotContains(response, lab_a.get_absolute_url())
         self.assertNotContains(response, lab_a_clab02.get_absolute_url())
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class LabDetailPageTestCase(TestCase):
+    """Test the selection panels, the Devices table, and the Nodes table on the lab page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _, cls.lab_devices, cls.labs = create_lab_view_data()
+        cls.lab_a = cls.labs[0]
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(*LAB_DETAIL_PERMISSIONS)
+
+    def get_lab_a_page(self, query=None):
+        """Return the response of the lab-a (clab01) page."""
+        return self.client.get(self.lab_a.get_absolute_url(), query)
+
+    def test_detail_page_shows_lab_selection_and_nodes(self):
+        response = self.get_lab_a_page()
+
+        for text in (
+            "alice",
+            LabStatusChoices.PLANNED,
+            "clab01",
+            "172.20.21.0/24",
+            "&quot;role&quot;",
+            "spine1",
+            "leaf1",
+            "stub-wan1",
+            "172.20.21.4",
+            "<strong>SELECTION</strong>",
+            "<strong>DEVICE FILTER</strong>",
+            "<strong>Devices</strong>",
+            "<strong>Nodes</strong>",
+        ):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+
+    @override_settings(PAGINATE_COUNT=2)
+    def test_panels_show_all_rows_when_rows_exceed_page_size(self):
+        device_link_counts_in_both_tables = {"leaf1": 2, "leaf2": 1, "spine1": 2}
+        self.lab_a.devices.set([self.lab_devices[name] for name in device_link_counts_in_both_tables])
+
+        response = self.get_lab_a_page()
+
+        for node_name in ("leaf1", "spine1", "stub-wan1"):
+            with self.subTest(node_name=node_name):
+                self.assertBodyContains(response, node_name)
+        for name, count in device_link_counts_in_both_tables.items():
+            with self.subTest(device=name):
+                self.assertContains(response, f'href="{self.lab_devices[name].get_absolute_url()}"', count=count)
+
+    def test_nodes_panel_sorts_by_the_sort_parameter(self):
+        response = self.get_lab_a_page({"sort": "-node_name"})
+
+        body = response.content.decode()
+        self.assertLess(body.index("stub-wan1"), body.index("leaf1"))
+
+    def test_detail_page_query_count_does_not_grow_with_rows(self):
+        self.lab_a.devices.set([self.lab_devices[name] for name in ("leaf1", "leaf2", "spine1")])
+        self.assertHttpStatus(self.get_lab_a_page(), 200)
+        with CaptureQueriesContext(connection) as few_rows:
+            self.assertHttpStatus(self.get_lab_a_page(), 200)
+        LabNode.objects.bulk_create(
+            LabNode(
+                lab=self.lab_a,
+                node_name=f"node-{number:02d}",
+                device=self.lab_devices["leaf1"],
+                kind="linux",
+                image="alpine:latest",
+            )
+            for number in range(1, 21)
+        )
+
+        with CaptureQueriesContext(connection) as many_rows:
+            response = self.get_lab_a_page()
+
+        self.assertBodyContains(response, "node-20")
+        self.assertLessEqual(len(many_rows), len(few_rows))
+
+    def test_lab_node_url_opens_lab_page(self):
+        node = LabNode.objects.get(lab=self.lab_a, node_name="stub-wan1")
+
+        self.assertEqual(node.get_absolute_url(), self.lab_a.get_absolute_url())

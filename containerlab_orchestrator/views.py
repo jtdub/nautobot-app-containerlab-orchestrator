@@ -11,6 +11,7 @@ from nautobot.apps.ui import (
     SectionChoices,
 )
 from nautobot.apps.views import NautobotUIViewSet
+from nautobot.dcim.tables import DeviceTable
 
 from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
@@ -163,6 +164,45 @@ class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
                 weight=100,
                 section=SectionChoices.LEFT_HALF,
                 fields=["name", "host", "owner", "status", "config_source", "mgmt_subnet", "built_at"],
+            ),
+            ObjectFieldsPanel(
+                weight=100,
+                section=SectionChoices.RIGHT_HALF,
+                label="Selection",
+                fields=["dynamic_group"],
+            ),
+            ObjectTextPanel(
+                weight=200,
+                section=SectionChoices.RIGHT_HALF,
+                label="Device filter",
+                object_field="device_filter",
+                render_as=ObjectTextPanel.RenderOptions.JSON,
+            ),
+            ObjectsTablePanel(
+                weight=300,
+                section=SectionChoices.RIGHT_HALF,
+                table_class=DeviceTable,
+                table_attribute="devices",
+                related_field_name="labs",
+                table_title="Devices",
+                add_button_route=None,
+                enable_related_link=False,
+                max_display_count=1000,
+                show_table_config_button=False,
+                exclude_columns=["pk", "tenant", "rack", "primary_ip", "actions"],
+                select_related_fields=["status", "role", "device_type__manufacturer", "location"],
+            ),
+            ObjectsTablePanel(
+                weight=200,
+                section=SectionChoices.FULL_WIDTH,
+                table_class=tables.LabNodeTable,
+                table_filter="lab",
+                table_title="Nodes",
+                add_button_route=None,
+                enable_related_link=False,
+                max_display_count=1000,
+                show_table_config_button=False,
+                select_related_fields=["device"],
             ),
         ),
     )

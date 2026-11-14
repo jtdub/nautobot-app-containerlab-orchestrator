@@ -3,7 +3,7 @@
 import django_tables2 as tables
 from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, StatusTableMixin, TagColumn, ToggleColumn
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
 
 class ContainerlabHostTable(BaseTable):
@@ -100,3 +100,22 @@ class LabTable(StatusTableMixin, BaseTable):
             "actions",
         )
         default_columns = ("pk", "name", "host", "owner", "status", "mgmt_subnet", "built_at", "actions")
+
+
+class LabNodeTable(BaseTable):
+    """Table of the node rows of a lab."""
+
+    node_name = tables.Column()
+    device = tables.Column(linkify=True)
+    is_stub = BooleanColumn()
+    kind = tables.Column()
+    image = tables.Column()
+    mgmt_ipv4 = tables.Column()
+    state = tables.Column()
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for LabNodeTable."""
+
+        model = LabNode
+        fields = ("node_name", "device", "is_stub", "kind", "image", "mgmt_ipv4", "state", "container_id")
+        default_columns = ("node_name", "device", "is_stub", "kind", "image", "mgmt_ipv4", "state")
