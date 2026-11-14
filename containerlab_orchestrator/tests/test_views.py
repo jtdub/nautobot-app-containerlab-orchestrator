@@ -779,9 +779,7 @@ class LabViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disab
     @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_create_without_planned_status_shows_banner(self):
         self.add_permissions("containerlab_orchestrator.add_lab")
-        Status.objects.get(name=LabStatusChoices.PLANNED).content_types.remove(
-            ContentType.objects.get_for_model(Lab)
-        )
+        Status.objects.get(name=LabStatusChoices.PLANNED).content_types.remove(ContentType.objects.get_for_model(Lab))
 
         response = self.client.post(self._get_url("add"), self.form_data)
 
