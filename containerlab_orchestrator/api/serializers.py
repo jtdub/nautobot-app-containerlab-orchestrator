@@ -28,7 +28,7 @@ class NodeMappingSerializer(TaggedModelSerializerMixin, NautobotModelSerializer)
         fields = "__all__"
 
 
-class InterfaceMappingSerializer(ValidatedModelSerializer):
+class InterfaceMappingSerializer(ValidatedModelSerializer):  # pylint: disable=too-many-ancestors
     """Serializer for InterfaceMapping.
 
     The model full_clean() checks the unique names, so a duplicate has the same error key `__all__` as the model.

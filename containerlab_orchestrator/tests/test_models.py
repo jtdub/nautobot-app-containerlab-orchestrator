@@ -401,8 +401,10 @@ class InterfaceMappingModelTestCase(ModelTestCases.BaseModelTestCase):
         self.assertIsNone(row.to_objectchange("update", related_object=None).related_object)
 
     def test_to_objectchange_without_node_mapping_has_no_related_object(self):
+        """Patch the REST API form of the change, because the serializer also reads the gone node mapping."""
         row = InterfaceMapping(node_mapping_id=uuid.uuid4(), physical_name="Gi0/9", container_name="eth9")
-        self.assertIsNone(row.to_objectchange("delete").related_object)
+        with mock.patch("nautobot.extras.models.change_logging.serialize_object_v2", return_value={}):
+            self.assertIsNone(row.to_objectchange("delete").related_object)
 
     def test_get_absolute_url_opens_node_mapping(self):
         row = InterfaceMapping.objects.get(physical_name="GigabitEthernet0/1")
