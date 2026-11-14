@@ -71,7 +71,7 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
                 table_title="Interface Mappings",
                 add_button_route=None,
                 enable_related_link=False,
-                paginate=False,
+                max_display_count=1000,
                 show_table_config_button=False,
                 footer_buttons=(
                     Button(

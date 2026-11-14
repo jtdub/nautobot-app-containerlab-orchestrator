@@ -578,6 +578,16 @@ class NodeMappingInterfacePanelTestCase(TestCase):
             with self.subTest(physical_name=physical_name):
                 self.assertBodyContains(response, physical_name)
 
+    def test_panel_sorts_rows_by_the_sort_parameter(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.client.get(self.arista.get_absolute_url(), {"sort": "-physical_name"})
+
+        body = response.content.decode()
+        self.assertLess(body.index("GigabitEthernet0/10"), body.index("GigabitEthernet0/2"))
+
     def test_panel_hides_edit_button_without_change_permission(self):
         self.add_permissions(
             "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
