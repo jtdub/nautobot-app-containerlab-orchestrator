@@ -111,6 +111,15 @@ class InterfaceMappingRowForm(BootstrapMixin, forms.ModelForm):
         model = InterfaceMapping
         fields = ("physical_name", "container_name")
 
+    def __init__(self, *args, **kwargs):
+        """Remove the browser required check, so that the user can save with an empty row or a deleted row.
+
+        The server still rejects an empty name in a changed row.
+        """
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs.pop("required", None)
+
 
 InterfaceMappingFormSet = inlineformset_factory(
     parent_model=NodeMapping,

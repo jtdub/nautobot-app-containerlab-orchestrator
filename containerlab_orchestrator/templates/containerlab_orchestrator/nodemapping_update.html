@@ -62,11 +62,16 @@
         $('.formset_row-{{ interface_mappings.prefix }}').formset({
             addText: '<span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add another interface',
             addCssClass: 'btn btn-primary add-row',
-            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>',
+            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>' +
+                '<span class="visually-hidden">Delete interface row</span>',
             deleteCssClass: 'btn btn-danger delete-row',
             prefix: '{{ interface_mappings.prefix }}',
             formCssClass: 'dynamic-formset-{{ interface_mappings.prefix }}',
-            added: jsify_form
+            added: jsify_form,
+            removed: function () {
+                const rowCount = $('.dynamic-formset-{{ interface_mappings.prefix }}').length;
+                $('#id_{{ interface_mappings.prefix }}-TOTAL_FORMS').val(rowCount);
+            }
         });
     </script>
 {% endblock javascript %}

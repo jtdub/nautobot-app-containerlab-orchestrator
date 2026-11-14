@@ -490,6 +490,46 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS" value="1"')
         self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-0-physical_name"')
 
+    def test_edit_page_row_inputs_have_no_browser_required_check(self):
+        response = self.client.get(self.edit_url)
+
+        row_input_pattern = rf'<input[^>]*name="{INTERFACE_ROWS_PREFIX}-\d+-(?:physical|container)_name"[^>]*>'
+        row_inputs = re.findall(row_input_pattern, response.content.decode())
+        self.assertEqual(len(row_inputs), 8)
+        for row_input in row_inputs:
+            with self.subTest(row_input=row_input):
+                self.assertNotIn("required", row_input)
+
+    def test_edit_page_row_script_counts_deleted_rows_and_names_delete_button(self):
+        response = self.client.get(self.edit_url)
+
+        self.assertContains(response, f"const rowCount = $('.dynamic-formset-{INTERFACE_ROWS_PREFIX}').length;")
+        self.assertContains(response, f"$('#id_{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS').val(rowCount);")
+        self.assertContains(response, '<span class="visually-hidden">Delete interface row</span>')
+
+    def test_edit_keeps_new_and_changed_rows_when_an_earlier_row_is_deleted(self):
+        first, second, tenth = self.arista_rows()
+        data = {
+            **node_mapping_post_data(self.arista),
+            **formset_post_data(
+                [
+                    {**first, "DELETE": "on"},
+                    {**second, "container_name": "eth3"},
+                    tenth,
+                    {"physical_name": "GigabitEthernet0/5", "container_name": "eth5"},
+                ],
+                initial_count=3,
+            ),
+        }
+
+        response = self.client.post(self.edit_url, data)
+
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(
+            interface_pairs(self.arista),
+            [("GigabitEthernet0/2", "eth3"), ("GigabitEthernet0/5", "eth5"), ("GigabitEthernet0/10", "eth10")],
+        )
+
     def test_edit_page_shows_interface_rows(self):
         response = self.client.get(self.edit_url)
 
