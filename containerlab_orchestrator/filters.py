@@ -74,4 +74,4 @@ class InterfaceMappingFilterSet(BaseFilterSet):
         """Meta attributes for InterfaceMappingFilterSet."""
 
         model = InterfaceMapping
-        fields = ["id", "physical_name", "container_name"]
+        fields = "__all__"

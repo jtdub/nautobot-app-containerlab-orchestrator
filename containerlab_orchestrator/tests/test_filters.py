@@ -112,3 +112,10 @@ class InterfaceMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint:
         linux = NodeMapping.objects.get(platform__name="linux")
         result = self.filterset({"node_mapping": [linux.pk]}, self.queryset).qs
         self.assertQuerySetEqual(result, self.queryset.filter(physical_name="ens3"))
+
+    def test_created_and_last_updated_are_filters_and_ordering_field_is_not(self):
+        filters = self.filterset.get_filters()
+        for name in ("created", "created__gte", "last_updated", "last_updated__gte"):
+            with self.subTest(name=name):
+                self.assertIn(name, filters)
+        self.assertNotIn("_physical_name", filters)
