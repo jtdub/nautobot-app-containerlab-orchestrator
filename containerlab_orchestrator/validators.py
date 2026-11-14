@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 
 CLAB_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 IMAGE_REFERENCE_PATTERN = re.compile(r"[!-~]+")
+CONTAINER_INTERFACE_NAME_PATTERN = re.compile(r"[!-~]+")
 CLAB_MEMORY_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)? ?[kKmMgGtTpPeE][iI]?[bB]?")
 """A number and a go-humanize unit, which containerlab reads with ParseBytes."""
 
@@ -68,3 +69,20 @@ def validate_image_reference(value):
 def validate_clab_memory(value):
     """Reject a memory size that is not a number and a unit, for example 512mb or 1Gb."""
     _validate_text_pattern(value, CLAB_MEMORY_PATTERN, "Enter a number and a unit, for example 512mb or 1Gb.")
+
+
+def validate_container_interface_name(value):
+    """Reject a container interface name that holds a space or a character that is not printable ASCII."""
+    _validate_text_pattern(
+        value,
+        CONTAINER_INTERFACE_NAME_PATTERN,
+        "The container interface name must contain only printable characters and no spaces.",
+    )
+
+
+def validate_trimmed_name(value):
+    """Reject a value that is not text or that has whitespace at the start or the end."""
+    if not isinstance(value, str):
+        raise ValidationError("Enter a text value.")
+    if value != value.strip():
+        raise ValidationError("Remove the spaces at the start and the end of the name.")

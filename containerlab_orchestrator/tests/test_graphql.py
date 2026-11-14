@@ -1,4 +1,4 @@
-"""Tests for the ContainerlabHost and NodeMapping GraphQL types."""
+"""Tests for the ContainerlabHost, NodeMapping, and InterfaceMapping GraphQL types."""
 
 from nautobot.apps.graphql import execute_query
 from nautobot.apps.testing import TestCase
@@ -6,6 +6,7 @@ from nautobot.apps.testing import TestCase
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
     create_containerlab_hosts,
+    create_interface_mappings,
     create_node_mappings,
     patch_secret_variables,
 )
@@ -40,6 +41,30 @@ query {
     }
     platform {
       name
+    }
+  }
+}
+"""
+
+INTERFACE_MAPPINGS_QUERY = """
+query {
+  interface_mappings {
+    physical_name
+    container_name
+    node_mapping {
+      kind
+    }
+  }
+}
+"""
+
+NODE_MAPPING_INTERFACES_QUERY = """
+query {
+  node_mappings {
+    kind
+    interface_mappings {
+      physical_name
+      container_name
     }
   }
 }
@@ -107,3 +132,45 @@ class NodeMappingGraphQLTestCase(TestCase):
         self.assertIsNone(mappings["ceos"]["platform"])
         self.assertEqual(mappings["linux"]["platform"], {"name": "linux"})
         self.assertIsNone(mappings["linux"]["device_type"])
+
+
+class InterfaceMappingGraphQLTestCase(TestCase):
+    """Test the interface_mappings GraphQL query and the interface rows of a node mapping."""
+
+    @classmethod
+    def setUpTestData(cls):
+        create_interface_mappings(create_node_mappings())
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(
+            "containerlab_orchestrator.view_interfacemapping",
+            "containerlab_orchestrator.view_nodemapping",
+        )
+
+    def test_query_returns_rows(self):
+        result = execute_query(INTERFACE_MAPPINGS_QUERY, user=self.user)
+
+        self.assertIsNone(result.errors)
+        rows = result.data["interface_mappings"]
+        self.assertCountEqual(
+            [(row["physical_name"], row["container_name"], row["node_mapping"]["kind"]) for row in rows],
+            [
+                ("GigabitEthernet0/1", "eth1", "ceos"),
+                ("GigabitEthernet0/2", "eth2", "ceos"),
+                ("GigabitEthernet0/10", "eth10", "ceos"),
+                ("ens3", "eth1", "linux"),
+            ],
+        )
+
+    def test_node_mapping_query_returns_its_rows(self):
+        result = execute_query(NODE_MAPPING_INTERFACES_QUERY, user=self.user)
+
+        self.assertIsNone(result.errors)
+        mappings = {mapping["kind"]: mapping["interface_mappings"] for mapping in result.data["node_mappings"]}
+        self.assertEqual(
+            [row["physical_name"] for row in mappings["ceos"]],
+            ["GigabitEthernet0/1", "GigabitEthernet0/2", "GigabitEthernet0/10"],
+        )
+        self.assertEqual(mappings["linux"], [{"physical_name": "ens3", "container_name": "eth1"}])
+        self.assertEqual(mappings["nokia_srlinux"], [])

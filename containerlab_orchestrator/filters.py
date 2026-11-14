@@ -1,10 +1,16 @@
 """Filter sets for the containerlab_orchestrator app."""
 
-from nautobot.apps.filters import NaturalKeyOrPKMultipleChoiceFilter, NautobotFilterSet, SearchFilter
+from nautobot.apps.filters import (
+    BaseFilterSet,
+    ModelMultipleChoiceFilter,
+    NaturalKeyOrPKMultipleChoiceFilter,
+    NautobotFilterSet,
+    SearchFilter,
+)
 from nautobot.dcim.models import DeviceType, Platform
 from nautobot.extras.models import SecretsGroup
 
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 
 
 class ContainerlabHostFilterSet(NautobotFilterSet):
@@ -55,4 +61,17 @@ class NodeMappingFilterSet(NautobotFilterSet):
         """Meta attributes for NodeMappingFilterSet."""
 
         model = NodeMapping
+        fields = "__all__"
+
+
+class InterfaceMappingFilterSet(BaseFilterSet):
+    """Filter set for InterfaceMapping."""
+
+    q = SearchFilter(filter_predicates={"physical_name": "icontains", "container_name": "icontains"})
+    node_mapping = ModelMultipleChoiceFilter(queryset=NodeMapping.objects.all(), label="Node mapping (ID)")
+
+    class Meta:
+        """Meta attributes for InterfaceMappingFilterSet."""
+
+        model = InterfaceMapping
         fields = "__all__"

@@ -1,4 +1,4 @@
-"""Tests for the node mapping validators."""
+"""Tests for the node mapping and interface mapping validators."""
 
 from django.core.exceptions import ValidationError
 from nautobot.apps.testing import TestCase
@@ -6,9 +6,11 @@ from nautobot.apps.testing import TestCase
 from containerlab_orchestrator.validators import (
     validate_clab_kind,
     validate_clab_memory,
+    validate_container_interface_name,
     validate_image_reference,
     validate_json_object,
     validate_string_map,
+    validate_trimmed_name,
 )
 
 TEXT_VALUE_MESSAGE = "Enter a text value."
@@ -113,3 +115,37 @@ class MemoryValidatorTestCase(ValidatorTestCase):
 
     def test_rejects_value_that_is_not_text(self):
         self.assert_rejects(validate_clab_memory, [5], TEXT_VALUE_MESSAGE)
+
+
+class ContainerInterfaceNameValidatorTestCase(ValidatorTestCase):
+    """Test validate_container_interface_name."""
+
+    def test_accepts_container_interface_name(self):
+        self.assert_accepts(validate_container_interface_name, ["eth1", "Ethernet1", "e1-1", "ethernet-1/1"])
+
+    def test_rejects_bad_container_interface_name(self):
+        self.assert_rejects(
+            validate_container_interface_name,
+            ["", "eth 1", "eth1\n", "eth\x001", "éth1"],
+            "The container interface name must contain only printable characters and no spaces.",
+        )
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_container_interface_name, [5], TEXT_VALUE_MESSAGE)
+
+
+class TrimmedNameValidatorTestCase(ValidatorTestCase):
+    """Test validate_trimmed_name."""
+
+    def test_accepts_trimmed_name(self):
+        self.assert_accepts(validate_trimmed_name, ["GigabitEthernet0/0/1"])
+
+    def test_rejects_name_with_whitespace_at_start_or_end(self):
+        self.assert_rejects(
+            validate_trimmed_name,
+            [" Gi0/1", "Gi0/1 ", "Gi0/1\n"],
+            "Remove the spaces at the start and the end of the name.",
+        )
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_trimmed_name, [5], TEXT_VALUE_MESSAGE)

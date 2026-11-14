@@ -1,0 +1,1 @@
+Added interface mappings to the REST API and GraphQL. An interface mapping gives the container interface name for a physical interface name of a node mapping.
