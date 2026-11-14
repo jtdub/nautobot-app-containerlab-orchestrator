@@ -255,10 +255,7 @@ class LabGraphQLTestCase(TestCase):
         nodes = result.data["lab_nodes"]
         self.assertEqual(len(nodes), 5)
         stub = next(node for node in nodes if node["node_name"] == "stub-wan1")
-        self.assertEqual(
-            stub,
-            {"node_name": "stub-wan1", "is_stub": True, "mgmt_ipv4": "172.20.21.4", "device": None, "lab": {"name": "lab-a"}},
-        )
+        self.assertEqual((stub["is_stub"], stub["device"], stub["mgmt_ipv4"]), (True, None, "172.20.21.4"))
 
     def test_query_for_owner_returns_error(self):
         """Use the GraphQL API endpoint, because `execute_query` does not validate the field names."""

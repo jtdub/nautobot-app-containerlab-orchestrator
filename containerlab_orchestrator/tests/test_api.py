@@ -9,8 +9,6 @@ from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, Status
 from rest_framework import status
 
-from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
-
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
@@ -23,6 +21,7 @@ from containerlab_orchestrator.tests.fixtures import (
     create_node_mappings,
     patch_secret_variables,
 )
+from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
 
 
 class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
@@ -252,7 +251,12 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
         clab03 = cls.hosts[2].pk
         cls.create_data = [
             {"name": "api-lab-1", "host": clab03, "mgmt_subnet": "192.168.10.0/24"},
-            {"name": "api-lab-2", "host": clab03, "mgmt_subnet": "192.168.11.0/24", "device_filter": {"role": ["spine"]}},
+            {
+                "name": "api-lab-2",
+                "host": clab03,
+                "mgmt_subnet": "192.168.11.0/24",
+                "device_filter": {"role": ["spine"]},
+            },
             {"name": "api-lab-3", "host": clab03, "mgmt_subnet": "192.168.12.0/24", "config_source": "jinja2"},
         ]
         cls.update_data = {"mgmt_subnet": "192.168.20.0/24", "config_source": "jinja2"}
