@@ -135,6 +135,7 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
                 interface_rows.save()
         except IntegrityError as error:
             raise ValidationError(
-                "Two interface rows have the same name. Names that differ only in case or accent count as the same name."
+                "Two interface rows have the same name. "
+                "Names that differ only in case or accent count as the same name."
             ) from error
         return obj

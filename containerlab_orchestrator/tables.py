@@ -60,7 +60,7 @@ class NodeMappingTable(BaseTable):
 class InterfaceMappingTable(BaseTable):
     """Table of the interface rows of a node mapping."""
 
-    physical_name = tables.Column()
+    physical_name = tables.Column(order_by=("_physical_name",))
     container_name = tables.Column()
 
     class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods

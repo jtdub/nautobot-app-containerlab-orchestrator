@@ -3,7 +3,7 @@
 
 {% block form %}
     <div class="card">
-        <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
+        <div class="card-header"><strong>{{ verbose_name|capfirst }}</strong></div>
         <div class="card-body">
             {% render_form form %}
         </div>
@@ -41,6 +41,7 @@
                                 {% if field.errors %}
                                     <ul>
                                         {% for error in field.errors %}
+                                            <!-- FORM-ERROR {{ field.name }}: {{ error }} -->
                                             <li class="text-danger">{{ error }}</li>
                                         {% endfor %}
                                     </ul>

@@ -1,6 +1,7 @@
 """Tests for the containerlab_orchestrator web UI."""
 
 import json
+import re
 import unittest
 
 from django.contrib.contenttypes.models import ContentType
@@ -14,6 +15,7 @@ from nautobot.extras.models import ObjectChange
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.tables import InterfaceMappingTable
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_http_secrets_group,
@@ -480,10 +482,19 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         self.assertBodyContains(response, "Names that differ only in case or accent count as the same name.")
         self.assertFalse(self.nokia.interface_mappings.exists())
 
+    def test_add_page_shows_one_empty_interface_row(self):
+        response = self.client.get(self.add_url)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS" value="1"')
+        self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-0-physical_name"')
+
     def test_edit_page_shows_interface_rows(self):
         response = self.client.get(self.edit_url)
 
         self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "<strong>Node mapping</strong>")
         self.assertBodyContains(response, "Interface Mappings")
         self.assertBodyContains(response, 'value="GigabitEthernet0/10"')
         self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS"')
@@ -514,11 +525,17 @@ class NodeMappingInterfacePanelTestCase(TestCase):
     def setUpTestData(cls):
         node_mappings = create_node_mappings()
         create_interface_mappings(node_mappings)
-        cls.arista = node_mappings[0]
+        cls.arista, cls.nokia, _ = node_mappings
 
-    def get_detail_page(self):
-        """Return the response of the Arista node mapping detail page."""
-        return self.client.get(self.arista.get_absolute_url())
+    def get_detail_page(self, mapping=None):
+        """Return the response of the detail page of a node mapping, by default the Arista mapping."""
+        return self.client.get((mapping or self.arista).get_absolute_url())
+
+    def assertEditInterfacesLink(self, response, mapping):  # pylint: disable=invalid-name
+        """Assert that one link element holds the edit URL of the mapping and the label Edit interfaces."""
+        edit_url = reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": mapping.pk})
+        link = re.compile(rf'<a href="{re.escape(edit_url)}"[^>]*>\s*<span[^>]*></span>\s*Edit interfaces\s*</a>')
+        self.assertRegex(response.content.decode(), link)
 
     def test_panel_shows_rows_and_edit_button_with_change_permission(self):
         self.add_permissions(
@@ -533,10 +550,21 @@ class NodeMappingInterfacePanelTestCase(TestCase):
         self.assertBodyContains(response, "Interface Mappings")
         self.assertBodyContains(response, "GigabitEthernet0/10")
         self.assertBodyContains(response, "eth10")
-        self.assertBodyContains(response, "Edit interfaces")
-        self.assertBodyContains(
-            response, reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.arista.pk})
+        self.assertEditInterfacesLink(response, self.arista)
+
+    def test_panel_of_mapping_with_no_rows_shows_empty_table_and_edit_button(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping",
+            "containerlab_orchestrator.view_interfacemapping",
+            "containerlab_orchestrator.change_nodemapping",
         )
+
+        response = self.get_detail_page(self.nokia)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertNotContains(response, "GigabitEthernet0/10")
+        self.assertEditInterfacesLink(response, self.nokia)
 
     def test_panel_hides_edit_button_without_change_permission(self):
         self.add_permissions(
@@ -555,3 +583,20 @@ class NodeMappingInterfacePanelTestCase(TestCase):
 
         self.assertBodyContains(response, "Interface Mappings")
         self.assertNotContains(response, "GigabitEthernet0/10")
+
+
+class InterfaceMappingTableTestCase(TestCase):
+    """Test the sort order of the interface rows table."""
+
+    def test_sort_by_physical_name_uses_natural_interface_order(self):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        arista = node_mappings[0]
+        for order_by, expected in (
+            ("physical_name", list(ARISTA_PHYSICAL_NAMES)),
+            ("-physical_name", list(reversed(ARISTA_PHYSICAL_NAMES))),
+        ):
+            with self.subTest(order_by=order_by):
+                table = InterfaceMappingTable(arista.interface_mappings.all(), order_by=order_by)
+
+                self.assertEqual([row.record.physical_name for row in table.rows], expected)
