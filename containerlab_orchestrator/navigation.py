@@ -32,6 +32,23 @@ menu_items = (
                     ),
                 ),
             ),
+            NavMenuGroup(
+                name="Mappings",
+                weight=200,
+                items=(
+                    NavMenuItem(
+                        link="plugins:containerlab_orchestrator:nodemapping_list",
+                        name="Node Mappings",
+                        permissions=["containerlab_orchestrator.view_nodemapping"],
+                        buttons=(
+                            NavMenuAddButton(
+                                link="plugins:containerlab_orchestrator:nodemapping_add",
+                                permissions=["containerlab_orchestrator.add_nodemapping"],
+                            ),
+                        ),
+                    ),
+                ),
+            ),
         ),
     ),
 )

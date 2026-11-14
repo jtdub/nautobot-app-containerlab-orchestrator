@@ -10,6 +10,7 @@ from containerlab_orchestrator import views
 app_name = "containerlab_orchestrator"
 router = NautobotUIViewSetRouter()
 router.register("containerlab-hosts", views.ContainerlabHostUIViewSet)
+router.register("node-mappings", views.NodeMappingUIViewSet)
 
 
 urlpatterns = [
