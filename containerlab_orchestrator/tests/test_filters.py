@@ -3,9 +3,13 @@
 from nautobot.apps.testing import FilterTestCases
 from nautobot.dcim.models import Platform
 
-from containerlab_orchestrator.filters import ContainerlabHostFilterSet, NodeMappingFilterSet
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_node_mappings
+from containerlab_orchestrator.filters import ContainerlabHostFilterSet, InterfaceMappingFilterSet, NodeMappingFilterSet
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.tests.fixtures import (
+    create_containerlab_hosts,
+    create_interface_mappings,
+    create_node_mappings,
+)
 
 
 class ContainerlabHostFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
@@ -77,3 +81,34 @@ class NodeMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disa
     def test_config_source(self):
         result = self.filterset({"config_source": ["none"]}, self.queryset).qs
         self.assertQuerySetEqual(result, self.queryset.filter(device_type__model="7220 IXR-D3"))
+
+
+class InterfaceMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot filter tests on InterfaceMappingFilterSet."""
+
+    queryset = InterfaceMapping.objects.all()
+    filterset = InterfaceMappingFilterSet
+    generic_filter_tests = (
+        ["physical_name"],
+        ["container_name"],
+        ["node_mapping", "node_mapping__id"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        InterfaceMapping.objects.create(
+            node_mapping=node_mappings[1], physical_name="ethernet-1/1", container_name="e1-1"
+        )
+
+    def test_q_matches_physical_and_container_name(self):
+        for value, expected in (("gigabitethernet0/10", "GigabitEthernet0/10"), ("ETH10", "GigabitEthernet0/10")):
+            with self.subTest(value=value):
+                result = self.filterset({"q": value}, self.queryset).qs
+                self.assertQuerySetEqual(result, self.queryset.filter(physical_name=expected))
+
+    def test_node_mapping_returns_rows_of_that_mapping_only(self):
+        linux = NodeMapping.objects.get(platform__name="linux")
+        result = self.filterset({"node_mapping": [linux.pk]}, self.queryset).qs
+        self.assertQuerySetEqual(result, self.queryset.filter(physical_name="ens3"))
