@@ -111,7 +111,9 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
         context = super().get_extra_context(request, instance)
         if self.action in ("create", "update"):
             data = request.POST if _has_interface_rows(request) else None
-            context[INTERFACE_ROWS_PREFIX] = forms.InterfaceMappingFormSet(data=data, instance=instance)
+            context[INTERFACE_ROWS_PREFIX] = forms.InterfaceMappingFormSet(
+                data=data, instance=instance, prefix=INTERFACE_ROWS_PREFIX
+            )
         return context
 
     def form_save(self, form, **kwargs):
@@ -123,7 +125,9 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
         obj = super().form_save(form, **kwargs)
         if not _has_interface_rows(self.request):
             return obj
-        interface_rows = forms.InterfaceMappingFormSet(data=self.request.POST, instance=obj)
+        interface_rows = forms.InterfaceMappingFormSet(
+            data=self.request.POST, instance=obj, prefix=INTERFACE_ROWS_PREFIX
+        )
         if not interface_rows.is_valid():
             raise ValidationError("Fix the errors in the interface rows.")
         try:

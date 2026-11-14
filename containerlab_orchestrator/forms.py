@@ -116,7 +116,6 @@ InterfaceMappingFormSet = inlineformset_factory(
     parent_model=NodeMapping,
     model=InterfaceMapping,
     form=InterfaceMappingRowForm,
-    fields=("physical_name", "container_name"),
     extra=1,
 )
 

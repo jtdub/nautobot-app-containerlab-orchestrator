@@ -339,40 +339,24 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         node_mappings = create_node_mappings()
         create_interface_mappings(node_mappings)
         cls.arista, cls.nokia, _ = node_mappings
+        cls.free_device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
+        )
 
     def setUp(self):
         super().setUp()
         self.add_permissions(*NODE_MAPPING_EDIT_PERMISSIONS)
+        self.add_url = reverse("plugins:containerlab_orchestrator:nodemapping_add")
         self.edit_url = reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.arista.pk})
 
     def arista_rows(self):
         """Return the POST row dictionaries of the three saved Arista rows."""
         return [existing_row(self.arista.interface_mappings.get(physical_name=name)) for name in ARISTA_PHYSICAL_NAMES]
 
-    def test_create_with_two_rows_saves_mapping_and_rows(self):
-        device_type = DeviceType.objects.create(
-            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
-        )
-        data = {
-            **node_mapping_post_data(self.arista, device_type=device_type.pk),
-            **formset_post_data(
-                [
-                    {"physical_name": "GigabitEthernet1", "container_name": "eth1"},
-                    {"physical_name": "GigabitEthernet2", "container_name": "eth2"},
-                ],
-                initial_count=0,
-            ),
-        }
-
-        response = self.client.post(reverse("plugins:containerlab_orchestrator:nodemapping_add"), data)
-
-        self.assertHttpStatus(response, 302)
-        mapping = NodeMapping.objects.get(device_type=device_type)
-        self.assertEqual(interface_pairs(mapping), [("GigabitEthernet1", "eth1"), ("GigabitEthernet2", "eth2")])
-
-    def test_edit_changes_deletes_and_adds_rows(self):
+    def edit_post_data(self):
+        """Return an Arista edit POST that keeps row 1, changes row 2, deletes row 3, and adds GigabitEthernet0/3."""
         first, second, tenth = self.arista_rows()
-        data = {
+        return {
             **node_mapping_post_data(self.arista),
             **formset_post_data(
                 [
@@ -385,7 +369,26 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
             ),
         }
 
-        response = self.client.post(self.edit_url, data)
+    def test_create_with_two_rows_saves_mapping_and_rows(self):
+        data = {
+            **node_mapping_post_data(self.arista, device_type=self.free_device_type.pk),
+            **formset_post_data(
+                [
+                    {"physical_name": "GigabitEthernet1", "container_name": "eth1"},
+                    {"physical_name": "GigabitEthernet2", "container_name": "eth2"},
+                ],
+                initial_count=0,
+            ),
+        }
+
+        response = self.client.post(self.add_url, data)
+
+        self.assertHttpStatus(response, 302)
+        mapping = NodeMapping.objects.get(device_type=self.free_device_type)
+        self.assertEqual(interface_pairs(mapping), [("GigabitEthernet1", "eth1"), ("GigabitEthernet2", "eth2")])
+
+    def test_edit_changes_deletes_and_adds_rows(self):
+        response = self.client.post(self.edit_url, self.edit_post_data())
 
         self.assertHttpStatus(response, 302)
         self.assertEqual(
@@ -416,15 +419,12 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
                 self.assertEqual(self.arista.image, "ceos:4.32.0F")
 
     def test_create_with_bad_container_name_shows_row_error_and_saves_nothing(self):
-        device_type = DeviceType.objects.create(
-            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
-        )
         data = {
-            **node_mapping_post_data(self.arista, device_type=device_type.pk),
+            **node_mapping_post_data(self.arista, device_type=self.free_device_type.pk),
             **formset_post_data([{"physical_name": "GigabitEthernet1", "container_name": "eth 1"}], initial_count=0),
         }
 
-        response = self.client.post(reverse("plugins:containerlab_orchestrator:nodemapping_add"), data)
+        response = self.client.post(self.add_url, data)
 
         self.assertHttpStatus(response, 200)
         self.assertBodyContains(response, "Fix the errors in the interface rows.")
@@ -432,7 +432,7 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
             response, "The container interface name must contain only printable characters and no spaces."
         )
         self.assertBodyContains(response, 'value="eth 1"')
-        self.assertFalse(NodeMapping.objects.filter(device_type=device_type).exists())
+        self.assertFalse(NodeMapping.objects.filter(device_type=self.free_device_type).exists())
 
     def test_edit_with_bad_kind_keeps_typed_rows(self):
         data = {
@@ -489,20 +489,7 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS"')
 
     def test_change_log_tab_lists_row_changes_from_the_form(self):
-        first, second, tenth = self.arista_rows()
-        data = {
-            **node_mapping_post_data(self.arista),
-            **formset_post_data(
-                [
-                    first,
-                    second,
-                    {**tenth, "DELETE": "on"},
-                    {"physical_name": "GigabitEthernet0/3", "container_name": "eth4"},
-                ],
-                initial_count=3,
-            ),
-        }
-        self.client.post(self.edit_url, data)
+        self.client.post(self.edit_url, self.edit_post_data())
         self.add_permissions("extras.view_objectchange")
 
         response = self.client.get(
@@ -510,8 +497,8 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         )
 
         self.assertHttpStatus(response, 200)
-        self.assertBodyContains(response, "GigabitEthernet0/3 → eth4")
-        self.assertBodyContains(response, "GigabitEthernet0/10 → eth10")
+        for row_text in ("GigabitEthernet0/2 → eth3", "GigabitEthernet0/3 → eth4", "GigabitEthernet0/10 → eth10"):
+            self.assertBodyContains(response, row_text)
         row_change = ObjectChange.objects.get(
             changed_object_type=ContentType.objects.get_for_model(InterfaceMapping),
             object_repr="GigabitEthernet0/3 → eth4",
