@@ -464,6 +464,12 @@ class LabNode(BaseModel):
         """Return the node name."""
         return self.node_name
 
+    def clean(self):
+        """Reject a stub node with a device."""
+        super().clean()
+        if self.is_stub and self.device_id is not None:
+            raise ValidationError({"device": "A stub node has no device."})
+
     def get_absolute_url(self, api=False):
         """Return the REST API URL of the row, or the lab page, because a row has no page of its own."""
         if api:

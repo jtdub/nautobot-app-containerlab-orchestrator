@@ -667,5 +667,18 @@ class LabNodeModelTestCase(ModelTestCases.BaseModelTestCase):
         with self.assertRaises(ValidationError):
             node.full_clean()
 
+    def test_stub_node_with_device_fails_validation(self):
+        node = LabNode(
+            lab=self.labs[0],
+            node_name="stub-wan9",
+            is_stub=True,
+            device=self.lab_devices["leaf1"],
+            kind="linux",
+            image="alpine:latest",
+        )
+        with self.assertRaises(ValidationError) as context:
+            node.full_clean()
+        self.assertEqual(context.exception.message_dict, {"device": ["A stub node has no device."]})
+
     def test_node_that_is_not_stub_without_device_passes_validation(self):
         LabNode(lab=self.labs[0], node_name="leaf9", kind="linux", image="alpine:latest").full_clean()
