@@ -365,6 +365,19 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         """Return the lab name."""
         return self.name
 
+    def clean(self):
+        """Reject a name that another lab on the host has, in any case."""
+        super().clean()
+        errors = {}
+        if (
+            self.name
+            and self.host_id
+            and Lab.objects.filter(host_id=self.host_id, name__iexact=self.name).exclude(pk=self.pk).exists()
+        ):
+            errors["name"] = ["A lab with this name already exists on this host."]
+        if errors:
+            raise ValidationError(errors)
+
     def set_create_defaults(self, user):
         """Make the user the owner and set the Planned status.
 

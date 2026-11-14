@@ -30,6 +30,7 @@ MISSING_USERNAME_MESSAGE = "The Secrets Group must have an HTTP(S) username secr
 MISSING_PASSWORD_MESSAGE = "The Secrets Group must have an HTTP(S) password secret."
 BOTH_TARGETS_MESSAGE = "Set a Device Type or a Platform, but not both."
 NO_TARGET_MESSAGE = "Set a Device Type or a Platform."
+DUPLICATE_LAB_MESSAGE = "A lab with this name already exists on this host."
 PLANNED_NOT_AVAILABLE_MESSAGE = "The Planned status is not available for labs. Ask an administrator to add it."
 
 
@@ -512,6 +513,35 @@ class LabModelTestCase(ModelTestCases.BaseModelTestCase):
     def test_natural_key_is_host_name_and_lab_name(self):
         self.assertEqual(self.labs[0].natural_key(), ["clab01", "lab-a"])
         self.assertEqual(Lab.objects.get_by_natural_key("clab01", "lab-a"), self.labs[0])
+
+
+class LabCleanTestCase(LabTestCase):
+    """Test the validation of a lab."""
+
+    def build_lab(self, **kwargs):
+        """Return an unsaved Planned lab on clab01 with a free name and subnet, changed by the keyword arguments."""
+        values = {"name": "new-lab", "host": self.hosts[0], "mgmt_subnet": "192.168.1.0/24", "status": self.planned}
+        values.update(kwargs)
+        return Lab(**values)
+
+    def assert_errors(self, lab, errors):
+        """Assert that full_clean() raises exactly these errors."""
+        with self.assertRaises(ValidationError) as context:
+            lab.full_clean()
+        self.assertEqual(context.exception.message_dict, errors)
+
+    def test_duplicate_name_on_same_host_fails_validation(self):
+        for name in ("lab-a", "LAB-A"):
+            with self.subTest(name=name):
+                self.assert_errors(self.build_lab(name=name), {"name": [DUPLICATE_LAB_MESSAGE]})
+
+    def test_same_name_on_other_host_passes_validation(self):
+        self.build_lab(name="lab-b", host=self.hosts[1]).full_clean()
+
+    def test_edit_of_lab_passes_validation(self):
+        lab = self.labs[0]
+        lab.config_source = NodeMappingConfigSourceChoices.JINJA2
+        lab.full_clean()
 
 
 class LabDatabaseRuleTestCase(LabTestCase):
