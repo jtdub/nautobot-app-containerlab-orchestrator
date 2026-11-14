@@ -1,5 +1,6 @@
 """Validators for the containerlab_orchestrator app."""
 
+import ipaddress
 import re
 from urllib.parse import urlsplit
 
@@ -12,6 +13,22 @@ IMAGE_REFERENCE_PATTERN = re.compile(r"[!-~]+")
 CONTAINER_INTERFACE_NAME_PATTERN = re.compile(r"[!-~]+")
 CLAB_MEMORY_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)? ?[kKmMgGtTpPeE][iI]?[bB]?")
 """A number and a go-humanize unit, which containerlab reads with ParseBytes."""
+IPV4_CIDR_TEXT_PATTERN = re.compile(r"[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]+")
+IPV4_CIDR_PATTERN = re.compile(r"[0-9]{1,3}(\.[0-9]{1,3}){3}/([89]|[12][0-9]|30)")
+"""An IPv4 network in CIDR form with a prefix length from 8 to 30 and no leading zero."""
+NOT_UNICAST_NETWORK = ipaddress.IPv4Network("0.0.0.0/8")
+MIN_SUBNET_PREFIX_LENGTH = 8
+"""The shortest prefix that the app accepts for a lab network."""
+MAX_SUBNET_PREFIX_LENGTH = 30
+"""The longest prefix that leaves room for the gateway and one node."""
+CIDR_MESSAGE = "Enter an IPv4 network in CIDR form with no host bits, for example 172.20.21.0/24."
+SIZE_MESSAGE = (
+    f"Use a network from /{MIN_SUBNET_PREFIX_LENGTH} to /{MAX_SUBNET_PREFIX_LENGTH}, "
+    "so that the lab has room for at least one node."
+)
+UNICAST_MESSAGE = (
+    "Use a unicast network. Multicast, loopback, link-local, reserved, and 0.0.0.0/8 networks are not allowed."
+)
 
 
 def validate_clab_api_url(value):
@@ -76,6 +93,33 @@ def validate_clab_memory(value):
 def validate_clab_lab_name(value):
     """Reject a lab name that clab-api-server does not accept."""
     _validate_text_pattern(value, LAB_NAME_PATTERN, 'Use 1 to 128 letters, digits, "_", or "-".')
+
+
+def validate_ipv4_network(value):
+    """Reject a value that is not a unicast IPv4 network in CIDR form from /8 to /30 with no host bits."""
+    if not isinstance(value, str):
+        raise ValidationError("Enter a text value.")
+    if not IPV4_CIDR_PATTERN.fullmatch(value):
+        if IPV4_CIDR_TEXT_PATTERN.fullmatch(value):
+            raise ValidationError(SIZE_MESSAGE)
+        raise ValidationError(CIDR_MESSAGE)
+    try:
+        network = ipaddress.IPv4Network(value, strict=True)
+    except ValueError as error:
+        raise ValidationError(CIDR_MESSAGE) from error
+    if (
+        network.is_multicast
+        or network.is_loopback
+        or network.is_link_local
+        or network.is_reserved
+        or network.subnet_of(NOT_UNICAST_NETWORK)
+    ):
+        raise ValidationError(UNICAST_MESSAGE)
+
+
+def subnet_node_room(value):
+    """Return the number of node addresses in the subnet, after the network, gateway, and broadcast addresses."""
+    return ipaddress.IPv4Network(value).num_addresses - 3
 
 
 def validate_container_interface_name(value):

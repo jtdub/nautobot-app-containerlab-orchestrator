@@ -4,11 +4,16 @@ from django.core.exceptions import ValidationError
 from nautobot.apps.testing import TestCase
 
 from containerlab_orchestrator.validators import (
+    CIDR_MESSAGE,
+    SIZE_MESSAGE,
+    UNICAST_MESSAGE,
+    subnet_node_room,
     validate_clab_kind,
     validate_clab_lab_name,
     validate_clab_memory,
     validate_container_interface_name,
     validate_image_reference,
+    validate_ipv4_network,
     validate_json_object,
     validate_string_map,
     validate_trimmed_name,
@@ -164,3 +169,45 @@ class LabNameValidatorTestCase(ValidatorTestCase):
 
     def test_rejects_value_that_is_not_text(self):
         self.assert_rejects(validate_clab_lab_name, [5], TEXT_VALUE_MESSAGE)
+
+
+class Ipv4NetworkValidatorTestCase(ValidatorTestCase):
+    """Test validate_ipv4_network and subnet_node_room."""
+
+    def test_accepts_ipv4_network(self):
+        self.assert_accepts(validate_ipv4_network, ["172.20.21.0/24", "10.0.0.0/30", "10.0.0.0/8"])
+
+    def test_rejects_value_that_is_not_network_in_cidr_form(self):
+        self.assert_rejects(
+            validate_ipv4_network,
+            [
+                "172.20.21.0",
+                "172.20.21.1/24",
+                "2001:db8::/64",
+                "172.20.21.0/255.255.255.0",
+                " 172.20.21.0/24",
+                "300.1.1.0/24",
+                "010.0.0.0/24",
+            ],
+            CIDR_MESSAGE,
+        )
+
+    def test_rejects_prefix_length_out_of_range(self):
+        self.assert_rejects(
+            validate_ipv4_network, ["10.0.0.0/31", "10.0.0.0/32", "10.0.0.0/7", "10.0.0.0/08"], SIZE_MESSAGE
+        )
+
+    def test_rejects_network_that_is_not_unicast(self):
+        self.assert_rejects(
+            validate_ipv4_network,
+            ["224.0.0.0/24", "127.0.0.0/8", "169.254.0.0/16", "240.0.0.0/24", "0.0.0.0/8"],
+            UNICAST_MESSAGE,
+        )
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_ipv4_network, [5], TEXT_VALUE_MESSAGE)
+
+    def test_subnet_node_room_leaves_out_network_gateway_and_broadcast(self):
+        self.assertEqual(subnet_node_room("10.0.0.0/30"), 1)
+        self.assertEqual(subnet_node_room("172.20.22.0/28"), 13)
+        self.assertEqual(subnet_node_room("172.20.21.0/24"), 253)
