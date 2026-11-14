@@ -188,6 +188,15 @@ class InterfaceMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: 
     def test_bad_container_name_returns_400(self):
         self.assertIn("container_name", self._post_invalid(container_name="eth 1"))
 
+    def test_physical_name_with_spaces_at_start_and_end_is_stored_trimmed(self):
+        self.add_permissions(
+            "containerlab_orchestrator.add_interfacemapping", "containerlab_orchestrator.view_nodemapping"
+        )
+        payload = {"node_mapping": self.arista.pk, "physical_name": "Gi0/1 ", "container_name": "eth3"}
+        response = self.client.post(self._get_list_url(), payload, format="json", **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertEqual(InterfaceMapping.objects.get(pk=response.data["id"]).physical_name, "Gi0/1")
+
     def test_get_absolute_url_for_api_gives_row_url(self):
         row = InterfaceMapping.objects.get(physical_name="ens3")
         self.assertEqual(row.get_absolute_url(api=True), self._get_detail_url(row))
