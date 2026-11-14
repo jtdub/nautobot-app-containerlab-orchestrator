@@ -9,12 +9,19 @@ from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.forms import (
     ContainerlabHostFilterForm,
     ContainerlabHostForm,
+    LabBulkEditForm,
+    LabFilterForm,
+    LabForm,
     NodeMappingBulkEditForm,
     NodeMappingFilterForm,
     NodeMappingForm,
 )
-from containerlab_orchestrator.models import NodeMapping
-from containerlab_orchestrator.tests.fixtures import create_http_secrets_group, create_node_mappings
+from containerlab_orchestrator.models import Lab, NodeMapping
+from containerlab_orchestrator.tests.fixtures import (
+    create_containerlab_hosts,
+    create_http_secrets_group,
+    create_node_mappings,
+)
 from containerlab_orchestrator.tests.test_models import (
     BOTH_TARGETS_MESSAGE,
     MISSING_PASSWORD_MESSAGE,
@@ -160,3 +167,50 @@ class NodeMappingBulkEditFormTestCase(TestCase):
         for field_name in NodeMappingBulkEditForm.declared_fields:
             with self.subTest(field=field_name):
                 self.assertNotIn('placeholder="None"', str(form[field_name]))
+
+
+class LabFormTestCase(TestCase):
+    """Test the Lab create, edit, bulk edit, and filter forms."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.host = create_containerlab_hosts()[0]
+
+    def test_empty_device_filter_saves_empty_object(self):
+        form = LabForm(
+            data={
+                "name": "form-lab",
+                "host": self.host.pk,
+                "mgmt_subnet": "192.168.50.0/24",
+                "config_source": "none",
+                "device_filter": "",
+            }
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["device_filter"], {})
+
+    def test_lab_form_fields_have_labels(self):
+        form = LabForm()
+        expected_labels = {
+            "name": "Name",
+            "host": "Host",
+            "mgmt_subnet": "Management subnet",
+            "config_source": "Default config source",
+            "device_filter": "Device filter",
+            "dynamic_group": "Dynamic Group",
+            "devices": "Devices",
+        }
+        for field_name, label in expected_labels.items():
+            with self.subTest(field=field_name):
+                self.assertEqual(form.fields[field_name].label, label)
+        self.assertNotIn("owner", form.fields)
+        self.assertNotIn("status", form.fields)
+
+    def test_filter_and_bulk_edit_fields_have_labels(self):
+        for form in (LabFilterForm(), LabBulkEditForm(Lab)):
+            for field_name in type(form).declared_fields:
+                with self.subTest(form=type(form).__name__, field=field_name):
+                    if field_name != "pk":
+                        self.assertTrue(form.fields[field_name].label)
+                    self.assertNotIn('placeholder="None"', str(form[field_name]))
