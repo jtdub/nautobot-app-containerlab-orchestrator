@@ -6,7 +6,7 @@ from django.test import override_settings
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import APIViewTestCases, TransactionTestCase, create_job_result_and_run_job
 from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
-from nautobot.extras.models import DynamicGroup, Status
+from nautobot.extras.models import DynamicGroup, ObjectChange, Status
 from rest_framework import status
 
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
@@ -22,6 +22,9 @@ from containerlab_orchestrator.tests.fixtures import (
     patch_secret_variables,
 )
 from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
+
+OWNER_KEYS = {"id", "object_type", "url", "display", "username"}
+"""The keys of a lab owner in the REST API at depth 1 or more, and in the change log."""
 
 
 class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
@@ -284,6 +287,8 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
         lab = Lab.objects.get(pk=data["id"])
         self.assertEqual(lab.owner, self.user)
         self.assertEqual(lab.status.name, "Planned")
+        change = ObjectChange.objects.filter(changed_object_id=lab.pk).first()
+        self.assertEqual(set(change.object_data_v2["owner"]), OWNER_KEYS)
 
     def test_update_keeps_owner_and_status(self):
         self.add_permissions("containerlab_orchestrator.change_lab", "containerlab_orchestrator.view_lab")
@@ -335,7 +340,8 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
         self.add_permissions("containerlab_orchestrator.view_lab")
         for depth, expected_keys in (
             (0, {"id", "object_type", "url"}),
-            (2, {"id", "object_type", "url", "display", "username"}),
+            (1, OWNER_KEYS),
+            (2, OWNER_KEYS),
         ):
             with self.subTest(depth=depth):
                 response = self.client.get(f"{self._get_detail_url(self.labs[0])}?depth={depth}", **self.header)

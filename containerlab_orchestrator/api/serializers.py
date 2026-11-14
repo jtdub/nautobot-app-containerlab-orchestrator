@@ -58,6 +58,7 @@ class LabOwnerSerializer(BaseModelSerializer):
 
         model = get_user_model()
         fields = ["id", "object_type", "url", "display", "username"]
+        is_nested = True
 
 
 class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pylint: disable=too-many-ancestors
@@ -90,7 +91,7 @@ class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pyl
         return super().validate(attrs)
 
     def build_nested_field(self, field_name, relation_info, nested_depth):
-        """Show the owner with `LabOwnerSerializer` at each depth, so a lab reader does not see the user record."""
+        """Show the owner with `LabOwnerSerializer` at each depth from 1, so a lab reader does not see the user record."""
         if field_name == "owner":
             return LabOwnerSerializer, get_nested_relation_kwargs(relation_info)
         return super().build_nested_field(field_name, relation_info, nested_depth)
