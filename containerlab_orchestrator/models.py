@@ -286,7 +286,7 @@ class InterfaceMapping(BaseModel, ChangeLoggedModel):
         return super().to_objectchange(action, related_object=node_mapping, **kwargs)
 
 
-@extras_features("custom_links", "custom_validators", "export_templates", "statuses", "webhooks")
+@extras_features("custom_links", "custom_validators", "export_templates", "graphql", "statuses", "webhooks")
 class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
     """A saved selection of devices on one containerlab host, with a management subnet and a status.
 
@@ -428,6 +428,7 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
             ) from error
 
 
+@extras_features("graphql")
 class LabNode(BaseModel):
     """One containerlab node of a lab. The Build and Inspect jobs write the rows, so the model has no change log."""
 
