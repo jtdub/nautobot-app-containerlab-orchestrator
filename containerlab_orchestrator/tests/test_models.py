@@ -11,8 +11,8 @@ from django.db.models import ProtectedError
 from jinja2 import TemplateError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import ModelTestCases, TestCase
-from nautobot.dcim.models import DeviceType, Manufacturer, Platform
-from nautobot.extras.models import Secret, SecretsGroupAssociation, Status
+from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
+from nautobot.extras.models import DynamicGroup, Secret, SecretsGroupAssociation, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
@@ -515,8 +515,8 @@ class LabModelTestCase(ModelTestCases.BaseModelTestCase):
         self.assertEqual(Lab.objects.get_by_natural_key("clab01", "lab-a"), self.labs[0])
 
 
-class LabCleanTestCase(LabTestCase):
-    """Test the validation of a lab."""
+class LabValidationTestCase(LabTestCase):
+    """Base class with the helpers for the lab validation tests."""
 
     def build_lab(self, **kwargs):
         """Return an unsaved Planned lab on clab01 with a free name and subnet, changed by the keyword arguments."""
@@ -530,6 +530,10 @@ class LabCleanTestCase(LabTestCase):
             lab.full_clean()
         self.assertEqual(context.exception.message_dict, errors)
 
+
+class LabNameCleanTestCase(LabValidationTestCase):
+    """Test the unique name check of a lab."""
+
     def test_duplicate_name_on_same_host_fails_validation(self):
         for name in ("lab-a", "LAB-A"):
             with self.subTest(name=name):
@@ -542,6 +546,36 @@ class LabCleanTestCase(LabTestCase):
         lab = self.labs[0]
         lab.config_source = NodeMappingConfigSourceChoices.JINJA2
         lab.full_clean()
+
+
+class LabSelectionCleanTestCase(LabValidationTestCase):
+    """Test the validation of the selection and the subnet room of a lab."""
+
+    def test_device_filter_that_is_not_object_fails_validation(self):
+        self.assert_errors(
+            self.build_lab(device_filter=["leaf"]),
+            {"device_filter": ['Enter a JSON object, for example {"key": "value"}.']},
+        )
+        self.build_lab(device_filter={}).full_clean()
+
+    def test_dynamic_group_that_is_not_of_devices_fails_validation(self):
+        location_group = DynamicGroup.objects.create(
+            name="Lab locations", content_type=ContentType.objects.get_for_model(Location)
+        )
+        self.assert_errors(
+            self.build_lab(dynamic_group=location_group), {"dynamic_group": ["Select a Dynamic Group of devices."]}
+        )
+        self.build_lab(dynamic_group=self.lab_devices["leaf_group"]).full_clean()
+
+    def test_subnet_without_room_for_saved_nodes_fails_validation(self):
+        lab = self.labs[0]
+        lab.mgmt_subnet = "172.20.21.0/30"
+        self.assert_errors(
+            lab, {"mgmt_subnet": ["Node addresses in the subnet: 1. Nodes in the lab: 3. Use a larger subnet."]}
+        )
+        lab.mgmt_subnet = "172.20.21.0/29"
+        lab.full_clean()
+        self.build_lab(mgmt_subnet="10.0.0.0/30").full_clean()
 
 
 class LabDatabaseRuleTestCase(LabTestCase):

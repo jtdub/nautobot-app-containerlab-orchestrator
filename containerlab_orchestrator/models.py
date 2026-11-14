@@ -22,11 +22,12 @@ from nautobot.apps.models import (
     naturalize_interface,
 )
 from nautobot.apps.utils import validate_jinja2
-from nautobot.extras.models import SecretsGroup, SecretsGroupAssociation, Status
+from nautobot.extras.models import DynamicGroup, SecretsGroup, SecretsGroupAssociation, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 from containerlab_orchestrator.validators import (
+    subnet_node_room,
     validate_clab_api_url,
     validate_clab_kind,
     validate_clab_lab_name,
@@ -337,7 +338,9 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         max_length=CHARFIELD_MAX_LENGTH,
         validators=[validate_ipv4_network],
         verbose_name="Management subnet",
-        help_text="The IPv4 management network, for example 172.20.21.0/24. The gateway is .1 and the nodes start at .2.",
+        help_text=(
+            "The IPv4 management network, for example 172.20.21.0/24. The gateway is .1 and the nodes start at .2."
+        ),
     )
     topology_yaml = models.TextField(blank=True, editable=False, verbose_name="Topology YAML")
     built_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="Built at")
@@ -366,7 +369,10 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         return self.name
 
     def clean(self):
-        """Reject a name that another lab on the host has, in any case."""
+        """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.
+
+        The name check ignores case. The subnet check counts the saved node rows only.
+        """
         super().clean()
         errors = {}
         if (
@@ -375,8 +381,37 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
             and Lab.objects.filter(host_id=self.host_id, name__iexact=self.name).exclude(pk=self.pk).exists()
         ):
             errors["name"] = ["A lab with this name already exists on this host."]
+        try:
+            validate_json_object(self.device_filter)
+        except ValidationError as error:
+            errors["device_filter"] = error.messages
+        if self.dynamic_group_id is not None:
+            group_content_type = (
+                DynamicGroup.objects.filter(pk=self.dynamic_group_id)
+                .values_list("content_type__app_label", "content_type__model")
+                .first()
+            )
+            if group_content_type is not None and group_content_type != ("dcim", "device"):
+                errors["dynamic_group"] = ["Select a Dynamic Group of devices."]
+        subnet_message = self._subnet_room_message()
+        if subnet_message:
+            errors["mgmt_subnet"] = [subnet_message]
         if errors:
             raise ValidationError(errors)
+
+    def _subnet_room_message(self):
+        """Return an error when the saved node rows do not fit in a valid subnet, else an empty string."""
+        if not self.present_in_database:
+            return ""
+        try:
+            validate_ipv4_network(self.mgmt_subnet)
+        except ValidationError:
+            return ""
+        room = subnet_node_room(self.mgmt_subnet)
+        count = self.lab_nodes.count()
+        if count <= room:
+            return ""
+        return f"Node addresses in the subnet: {room}. Nodes in the lab: {count}. Use a larger subnet."
 
     def set_create_defaults(self, user):
         """Make the user the owner and set the Planned status.
