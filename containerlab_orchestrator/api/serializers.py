@@ -8,6 +8,7 @@ from nautobot.apps.api import (
     ValidatedModelSerializer,
 )
 from rest_framework import serializers
+from rest_framework.request import Request
 from rest_framework.utils.field_mapping import get_nested_relation_kwargs
 
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
@@ -78,14 +79,14 @@ class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pyl
         """On create, make the request user the owner and set the Planned status.
 
         Raises:
-            ValidationError: If the request has no signed-in user, as in the CSV import job.
+            ValidationError: If the request is not a REST API request of a signed-in user, as in the CSV import job.
         """
         if self.instance is None:
-            user = getattr(self.context.get("request"), "user", None)
-            if user is None or not user.is_authenticated:
+            request = self.context.get("request")
+            if not isinstance(request, Request) or not request.user.is_authenticated:
                 raise serializers.ValidationError("Use the add form or the REST API to add a lab.")
             lab = Lab()
-            lab.set_create_defaults(user)
+            lab.set_create_defaults(request.user)
             attrs["owner"] = lab.owner
             attrs["status"] = lab.status
         return super().validate(attrs)

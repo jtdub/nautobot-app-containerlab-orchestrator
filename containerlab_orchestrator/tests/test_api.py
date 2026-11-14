@@ -2,13 +2,14 @@
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import APIViewTestCases, TransactionTestCase, create_job_result_and_run_job
 from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, ObjectChange, Status
 from rest_framework import status
 
+from containerlab_orchestrator.api.serializers import LabSerializer
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
@@ -337,17 +338,26 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
                 self.assertEqual(errors, {field: [message]})
 
     def test_owner_shows_no_user_data_except_the_username(self):
+        """Nautobot 3.2 and later also drop `username` for a user who cannot view users."""
         self.add_permissions("containerlab_orchestrator.view_lab")
-        for depth, expected_keys in (
-            (0, {"id", "object_type", "url"}),
-            (1, OWNER_KEYS),
-            (2, OWNER_KEYS),
-        ):
+        for depth in (0, 1, 2):
             with self.subTest(depth=depth):
                 response = self.client.get(f"{self._get_detail_url(self.labs[0])}?depth={depth}", **self.header)
                 self.assertHttpStatus(response, status.HTTP_200_OK)
-                self.assertEqual(set(response.data["owner"]), expected_keys)
-        self.assertEqual(response.data["owner"]["username"], "alice")
+                self.assertLessEqual({"id", "object_type", "url"}, set(response.data["owner"]))
+                self.assertLessEqual(set(response.data["owner"]), OWNER_KEYS)
+
+    def test_create_outside_the_rest_api_fails(self):
+        """Nautobot 3.2 and later send the job user to the CSV import in a request that is not a REST API request."""
+        self.add_permissions("containerlab_orchestrator.view_containerlabhost")
+        request = RequestFactory().post("/")
+        request.user = self.user
+        data = {"name": "import-lab", "host": self.hosts[0].pk, "mgmt_subnet": "192.168.40.0/24"}
+
+        serializer = LabSerializer(data=data, context={"request": request})
+
+        self.assertFalse(serializer.is_valid())
+        self.assertEqual(serializer.errors, {"non_field_errors": ["Use the add form or the REST API to add a lab."]})
 
 
 class LabNodeAPITestCase(  # pylint: disable=too-many-ancestors
