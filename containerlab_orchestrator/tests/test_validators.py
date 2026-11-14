@@ -1,13 +1,19 @@
-"""Tests for the node mapping and interface mapping validators."""
+"""Tests for the node mapping, interface mapping, and lab validators."""
 
 from django.core.exceptions import ValidationError
 from nautobot.apps.testing import TestCase
 
 from containerlab_orchestrator.validators import (
+    CIDR_MESSAGE,
+    SIZE_MESSAGE,
+    UNICAST_MESSAGE,
+    subnet_node_room,
     validate_clab_kind,
+    validate_clab_lab_name,
     validate_clab_memory,
     validate_container_interface_name,
     validate_image_reference,
+    validate_ipv4_network,
     validate_json_object,
     validate_string_map,
     validate_trimmed_name,
@@ -16,6 +22,7 @@ from containerlab_orchestrator.validators import (
 TEXT_VALUE_MESSAGE = "Enter a text value."
 JSON_OBJECT_MESSAGE = 'Enter a JSON object, for example {"key": "value"}.'
 STRING_MAP_MESSAGE = "Each key and each value must be a string."
+LAB_NAME_MESSAGE = 'Use 1 to 128 letters, digits, "_", or "-".'
 
 
 class ValidatorTestCase(TestCase):
@@ -149,3 +156,58 @@ class TrimmedNameValidatorTestCase(ValidatorTestCase):
 
     def test_rejects_value_that_is_not_text(self):
         self.assert_rejects(validate_trimmed_name, [5], TEXT_VALUE_MESSAGE)
+
+
+class LabNameValidatorTestCase(ValidatorTestCase):
+    """Test validate_clab_lab_name."""
+
+    def test_accepts_lab_name(self):
+        self.assert_accepts(validate_clab_lab_name, ["lab-a", "Lab_01", "a" * 128])
+
+    def test_rejects_bad_lab_name(self):
+        self.assert_rejects(validate_clab_lab_name, ["lab a", "lab.a", "läb", "a" * 129], LAB_NAME_MESSAGE)
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_clab_lab_name, [5], TEXT_VALUE_MESSAGE)
+
+
+class Ipv4NetworkValidatorTestCase(ValidatorTestCase):
+    """Test validate_ipv4_network and subnet_node_room."""
+
+    def test_accepts_ipv4_network(self):
+        self.assert_accepts(validate_ipv4_network, ["172.20.21.0/24", "10.0.0.0/30", "10.0.0.0/8"])
+
+    def test_rejects_value_that_is_not_network_in_cidr_form(self):
+        self.assert_rejects(
+            validate_ipv4_network,
+            [
+                "172.20.21.0",
+                "172.20.21.1/24",
+                "2001:db8::/64",
+                "172.20.21.0/255.255.255.0",
+                " 172.20.21.0/24",
+                "300.1.1.0/24",
+                "010.0.0.0/24",
+            ],
+            CIDR_MESSAGE,
+        )
+
+    def test_rejects_prefix_length_out_of_range(self):
+        self.assert_rejects(
+            validate_ipv4_network, ["10.0.0.0/31", "10.0.0.0/32", "10.0.0.0/7", "10.0.0.0/08"], SIZE_MESSAGE
+        )
+
+    def test_rejects_network_that_is_not_unicast(self):
+        self.assert_rejects(
+            validate_ipv4_network,
+            ["224.0.0.0/24", "127.0.0.0/8", "169.254.0.0/16", "240.0.0.0/24", "0.0.0.0/8"],
+            UNICAST_MESSAGE,
+        )
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_ipv4_network, [5], TEXT_VALUE_MESSAGE)
+
+    def test_subnet_node_room_leaves_out_network_gateway_and_broadcast(self):
+        self.assertEqual(subnet_node_room("10.0.0.0/30"), 1)
+        self.assertEqual(subnet_node_room("172.20.22.0/28"), 13)
+        self.assertEqual(subnet_node_room("172.20.21.0/24"), 253)
