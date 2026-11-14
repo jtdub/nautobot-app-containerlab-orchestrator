@@ -752,6 +752,17 @@ class LabViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disab
         self.assertBodyContains(response, DUPLICATE_LAB_NAME_MESSAGE)
         self.assertFalse(Lab.objects.filter(name="LAB-A").exists())
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_detail_page_shows_lab_fields(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+
+        response = self.client.get(self.lab_b.get_absolute_url())
+
+        self.assertHttpStatus(response, 200)
+        for text in ("lab-b", "bob", LabStatusChoices.BUILT, "clab01", "172.20.22.0/28", "Jinja2 template"):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+
     @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
     def test_list_filtered_by_status_and_owner(self):
         self.add_permissions("containerlab_orchestrator.view_lab")
