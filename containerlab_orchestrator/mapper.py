@@ -12,8 +12,8 @@ from containerlab_orchestrator.constants import APP_NAME
 from containerlab_orchestrator.models import InterfaceMapping, NodeMapping
 from containerlab_orchestrator.validators import validate_clab_kind, validate_image_reference
 
-DEFAULT_MAPPING_KEYS = ("kind", "image")
-"""The keys that the default_node_mapping setting holds."""
+DEFAULT_MAPPING_VALIDATORS = {"kind": validate_clab_kind, "image": validate_image_reference}
+"""The keys that the default_node_mapping setting holds, and the validator of each value."""
 
 FALLBACK_INTERFACE_PREFIX = "eth"
 """The prefix of a fallback name. eth0 is the management interface, so the numbers start at 1."""
@@ -56,15 +56,15 @@ def _default_mapping():
         ImproperlyConfigured: If the setting is not a dict with a valid kind and image and no other key.
     """
     setting = get_app_settings_or_config(APP_NAME, "default_node_mapping")
-    if not isinstance(setting, dict) or any(key not in setting for key in DEFAULT_MAPPING_KEYS):
+    if not isinstance(setting, dict) or any(key not in setting for key in DEFAULT_MAPPING_VALIDATORS):
         raise ImproperlyConfigured("The default_node_mapping setting must be a dict with a kind and an image.")
-    for key, validator in (("kind", validate_clab_kind), ("image", validate_image_reference)):
+    for key, validator in DEFAULT_MAPPING_VALIDATORS.items():
         try:
             validator(setting[key])
         except ValidationError as error:
             message = " ".join(error.messages)
             raise ImproperlyConfigured(f"The default_node_mapping setting is not valid: {key}: {message}") from error
-    unknown_keys = sorted(str(key) for key in setting if key not in DEFAULT_MAPPING_KEYS)
+    unknown_keys = sorted(str(key) for key in setting if key not in DEFAULT_MAPPING_VALIDATORS)
     if unknown_keys:
         raise ImproperlyConfigured(f"The default_node_mapping setting has an unknown key: {', '.join(unknown_keys)}.")
     return DefaultMapping(kind=setting["kind"], image=setting["image"])
@@ -134,9 +134,8 @@ def map_interfaces(mapping, interfaces):
         if interface.name in table:
             container_names[interface] = table[interface.name]
             continue
-        while f"{FALLBACK_INTERFACE_PREFIX}{number}" in used_names:
+        while (fallback := f"{FALLBACK_INTERFACE_PREFIX}{number}") in used_names:
             number += 1
-        fallback = f"{FALLBACK_INTERFACE_PREFIX}{number}"
         used_names.add(fallback)
         container_names[interface] = fallback
         warnings.append(

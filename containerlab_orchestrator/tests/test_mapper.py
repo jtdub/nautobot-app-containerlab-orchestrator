@@ -1,6 +1,7 @@
 """Tests for the node mapping resolver and the interface mapper."""
 
 import copy
+import dataclasses
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
@@ -77,21 +78,21 @@ class ResolveMappingTestCase(MapperTestCase):
             mapping = resolve_mapping(device)
         self.assertIsInstance(mapping, DefaultMapping)
         self.assertEqual(
-            (
-                mapping.kind,
-                mapping.image,
-                mapping.node_type,
-                mapping.env,
-                mapping.cpu,
-                mapping.memory,
-                mapping.overrides,
-                mapping.config_source,
-                mapping.config_template,
-            ),
-            ("nokia_srlinux", "ghcr.io/nokia/srlinux:latest", "", {}, None, "", {}, "", ""),
+            dataclasses.asdict(mapping),
+            {
+                "kind": "nokia_srlinux",
+                "image": "ghcr.io/nokia/srlinux:latest",
+                "node_type": "",
+                "env": {},
+                "cpu": None,
+                "memory": "",
+                "overrides": {},
+                "config_source": "",
+                "config_template": "",
+                "device_type": None,
+                "platform": None,
+            },
         )
-        self.assertIsNone(mapping.device_type)
-        self.assertIsNone(mapping.platform)
 
     def test_resolve_mapping_for_device_without_platform_ignores_device_type_mappings(self):
         device = Device(name="srv1", device_type=self.unmapped_type)
@@ -118,22 +119,20 @@ class ResolveMappingTestCase(MapperTestCase):
     def test_resolve_mapping_raises_improperly_configured_for_bad_setting(self):
         device = Device(name="srv1", device_type=self.unmapped_type)
         bad_settings = {
-            "list": ["linux", "alpine:latest"],
-            "no kind": {"image": "alpine:latest"},
-            "no image": {"kind": "linux"},
-            "kind 1": {"kind": 1, "image": "alpine:latest"},
-            "kind Linux": {"kind": "Linux", "image": "alpine:latest"},
-            "empty image": {"kind": "linux", "image": ""},
-            "space image": {"kind": "linux", "image": " "},
-            "image with a space": {"kind": "linux", "image": "alpine latest"},
-            "unknown key": {"kind": "linux", "image": "alpine:latest", "imgae": "alpine:3"},
+            "list": (["linux", "alpine:latest"], "must be a dict"),
+            "no kind": ({"image": "alpine:latest"}, "must be a dict"),
+            "no image": ({"kind": "linux"}, "must be a dict"),
+            "kind 1": ({"kind": 1, "image": "alpine:latest"}, "kind:"),
+            "kind Linux": ({"kind": "Linux", "image": "alpine:latest"}, "kind:"),
+            "empty image": ({"kind": "linux", "image": ""}, "image:"),
+            "space image": ({"kind": "linux", "image": " "}, "image:"),
+            "image with a space": ({"kind": "linux", "image": "alpine latest"}, "image:"),
+            "unknown key": ({"kind": "linux", "image": "alpine:latest", "imgae": "alpine:3"}, "imgae"),
         }
-        for label, value in bad_settings.items():
+        for label, (value, expected_text) in bad_settings.items():
             with self.subTest(label), default_mapping_setting(value):
-                with self.assertRaises(ImproperlyConfigured) as context:
+                with self.assertRaisesMessage(ImproperlyConfigured, expected_text):
                     resolve_mapping(device)
-                if label == "unknown key":
-                    self.assertIn("imgae", str(context.exception))
 
 
 class MapInterfacesTestCase(MapperTestCase):
