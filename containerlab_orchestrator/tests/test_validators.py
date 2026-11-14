@@ -1,10 +1,11 @@
-"""Tests for the node mapping and interface mapping validators."""
+"""Tests for the node mapping, interface mapping, and lab validators."""
 
 from django.core.exceptions import ValidationError
 from nautobot.apps.testing import TestCase
 
 from containerlab_orchestrator.validators import (
     validate_clab_kind,
+    validate_clab_lab_name,
     validate_clab_memory,
     validate_container_interface_name,
     validate_image_reference,
@@ -16,6 +17,7 @@ from containerlab_orchestrator.validators import (
 TEXT_VALUE_MESSAGE = "Enter a text value."
 JSON_OBJECT_MESSAGE = 'Enter a JSON object, for example {"key": "value"}.'
 STRING_MAP_MESSAGE = "Each key and each value must be a string."
+LAB_NAME_MESSAGE = 'Use 1 to 128 letters, digits, "_", or "-".'
 
 
 class ValidatorTestCase(TestCase):
@@ -149,3 +151,16 @@ class TrimmedNameValidatorTestCase(ValidatorTestCase):
 
     def test_rejects_value_that_is_not_text(self):
         self.assert_rejects(validate_trimmed_name, [5], TEXT_VALUE_MESSAGE)
+
+
+class LabNameValidatorTestCase(ValidatorTestCase):
+    """Test validate_clab_lab_name."""
+
+    def test_accepts_lab_name(self):
+        self.assert_accepts(validate_clab_lab_name, ["lab-a", "Lab_01", "a" * 128])
+
+    def test_rejects_bad_lab_name(self):
+        self.assert_rejects(validate_clab_lab_name, ["lab a", "lab.a", "läb", "a" * 129], LAB_NAME_MESSAGE)
+
+    def test_rejects_value_that_is_not_text(self):
+        self.assert_rejects(validate_clab_lab_name, [5], TEXT_VALUE_MESSAGE)

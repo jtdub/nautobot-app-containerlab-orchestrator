@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 
+from containerlab_orchestrator.clab_client import LAB_NAME_PATTERN
+
 CLAB_KIND_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 IMAGE_REFERENCE_PATTERN = re.compile(r"[!-~]+")
 CONTAINER_INTERFACE_NAME_PATTERN = re.compile(r"[!-~]+")
@@ -69,6 +71,11 @@ def validate_image_reference(value):
 def validate_clab_memory(value):
     """Reject a memory size that is not a number and a unit, for example 512mb or 1Gb."""
     _validate_text_pattern(value, CLAB_MEMORY_PATTERN, "Enter a number and a unit, for example 512mb or 1Gb.")
+
+
+def validate_clab_lab_name(value):
+    """Reject a lab name that clab-api-server does not accept."""
+    _validate_text_pattern(value, LAB_NAME_PATTERN, 'Use 1 to 128 letters, digits, "_", or "-".')
 
 
 def validate_container_interface_name(value):
