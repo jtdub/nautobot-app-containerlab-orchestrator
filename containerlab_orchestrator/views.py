@@ -126,5 +126,11 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
         interface_rows = forms.InterfaceMappingFormSet(data=self.request.POST, instance=obj)
         if not interface_rows.is_valid():
             raise ValidationError("Fix the errors in the interface rows.")
-        interface_rows.save()
+        try:
+            with transaction.atomic():
+                interface_rows.save()
+        except IntegrityError as error:
+            raise ValidationError(
+                "Two interface rows have the same name. Names that differ only in case or accent count as the same name."
+            ) from error
         return obj

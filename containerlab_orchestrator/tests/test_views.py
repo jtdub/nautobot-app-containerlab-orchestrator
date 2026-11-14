@@ -1,8 +1,10 @@
 """Tests for the containerlab_orchestrator web UI."""
 
 import json
+import unittest
 
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import override_settings
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
@@ -348,7 +350,9 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         return [existing_row(self.arista.interface_mappings.get(physical_name=name)) for name in ARISTA_PHYSICAL_NAMES]
 
     def test_create_with_two_rows_saves_mapping_and_rows(self):
-        device_type = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v")
+        device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
+        )
         data = {
             **node_mapping_post_data(self.arista, device_type=device_type.pk),
             **formset_post_data(
@@ -412,7 +416,9 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
                 self.assertEqual(self.arista.image, "ceos:4.32.0F")
 
     def test_create_with_bad_container_name_shows_row_error_and_saves_nothing(self):
-        device_type = DeviceType.objects.create(manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v")
+        device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
+        )
         data = {
             **node_mapping_post_data(self.arista, device_type=device_type.pk),
             **formset_post_data([{"physical_name": "GigabitEthernet1", "container_name": "eth 1"}], initial_count=0),
@@ -451,6 +457,29 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         self.assertBodyContains(response, "start with a letter.")
         self.assertNotContains(response, "ManagementForm data is missing")
 
+    @unittest.skipUnless(
+        connection.vendor == "mysql", "Only the MySQL default collation ignores case in a unique index."
+    )
+    def test_new_rows_that_differ_only_in_case_show_error_on_mysql(self):
+        data = {
+            **node_mapping_post_data(self.nokia),
+            **formset_post_data(
+                [
+                    {"physical_name": "ethernet-1/1", "container_name": "eth1"},
+                    {"physical_name": "ethernet-1/2", "container_name": "ETH1"},
+                ],
+                initial_count=0,
+            ),
+        }
+
+        response = self.client.post(
+            reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.nokia.pk}), data
+        )
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Names that differ only in case or accent count as the same name.")
+        self.assertFalse(self.nokia.interface_mappings.exists())
+
     def test_edit_page_shows_interface_rows(self):
         response = self.client.get(self.edit_url)
 
@@ -464,7 +493,12 @@ class NodeMappingInterfaceRowsViewTestCase(TestCase):
         data = {
             **node_mapping_post_data(self.arista),
             **formset_post_data(
-                [first, second, {**tenth, "DELETE": "on"}, {"physical_name": "GigabitEthernet0/3", "container_name": "eth4"}],
+                [
+                    first,
+                    second,
+                    {**tenth, "DELETE": "on"},
+                    {"physical_name": "GigabitEthernet0/3", "container_name": "eth4"},
+                ],
                 initial_count=3,
             ),
         }
