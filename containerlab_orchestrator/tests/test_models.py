@@ -436,16 +436,14 @@ class InterfaceMappingValidationTestCase(TestCase):
     def test_same_names_on_two_mappings_pass(self):
         InterfaceMapping(node_mapping=self.nokia, physical_name="Ethernet1", container_name="eth1").validated_save()
 
-    def test_empty_names_fail_validation(self):
-        for field_name in ("physical_name", "container_name"):
-            with self.subTest(field_name=field_name):
-                values = {"node_mapping": self.nokia, "physical_name": "Ethernet9", "container_name": "eth9"}
-                values[field_name] = ""
-                self.assert_error(InterfaceMapping(**values), field_name)
-
-    def test_bad_names_fail_validation(self):
-        for field_name, value in (("physical_name", "Ethernet9 "), ("container_name", "eth 9")):
-            with self.subTest(field_name=field_name):
+    def test_empty_and_bad_names_fail_validation(self):
+        for field_name, value in (
+            ("physical_name", ""),
+            ("container_name", ""),
+            ("physical_name", "Ethernet9 "),
+            ("container_name", "eth 9"),
+        ):
+            with self.subTest(field_name=field_name, value=value):
                 values = {"node_mapping": self.nokia, "physical_name": "Ethernet9", "container_name": "eth9"}
                 values[field_name] = value
                 self.assert_error(InterfaceMapping(**values), field_name)
