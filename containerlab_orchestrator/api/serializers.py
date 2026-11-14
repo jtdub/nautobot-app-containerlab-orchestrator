@@ -1,9 +1,14 @@
 """REST API serializers for the containerlab_orchestrator app."""
 
-from nautobot.apps.api import NautobotModelSerializer, TaggedModelSerializerMixin, ValidatedModelSerializer
+from nautobot.apps.api import (
+    BaseModelSerializer,
+    NautobotModelSerializer,
+    TaggedModelSerializerMixin,
+    ValidatedModelSerializer,
+)
 from rest_framework import serializers
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
 
 class ContainerlabHostSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pylint: disable=too-many-ancestors
@@ -71,3 +76,13 @@ class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pyl
             attrs["owner"] = lab.owner
             attrs["status"] = lab.status
         return super().validate(attrs)
+
+
+class LabNodeSerializer(BaseModelSerializer):
+    """Read-only serializer for LabNode."""
+
+    class Meta:
+        """Meta attributes for LabNodeSerializer."""
+
+        model = LabNode
+        fields = "__all__"

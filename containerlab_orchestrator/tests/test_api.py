@@ -11,13 +11,14 @@ from rest_framework import status
 
 from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
     create_containerlab_hosts,
     create_http_secrets_group,
     create_interface_mappings,
     create_lab_devices,
+    create_lab_nodes,
     create_labs,
     create_node_mappings,
     patch_secret_variables,
@@ -325,6 +326,54 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
             with self.subTest(field=field, value=value):
                 errors = self._post_lab(status.HTTP_400_BAD_REQUEST, **{"name": "api-bad", field: value})
                 self.assertEqual(errors, {field: [message]})
+
+
+class LabNodeAPITestCase(  # pylint: disable=too-many-ancestors
+    APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase
+):
+    """Run the generic Nautobot read tests and the read-only tests on LabNode."""
+
+    model = LabNode
+
+    @classmethod
+    def setUpTestData(cls):
+        lab_devices = create_lab_devices()
+        cls.labs = create_labs(create_containerlab_hosts(), lab_devices)
+        create_lab_nodes(cls.labs, lab_devices)
+
+    def test_write_returns_405(self):
+        self.add_permissions(
+            "containerlab_orchestrator.add_labnode",
+            "containerlab_orchestrator.change_labnode",
+            "containerlab_orchestrator.delete_labnode",
+        )
+        node = LabNode.objects.filter(node_name="leaf1").first()
+        payload = {"lab": self.labs[0].pk, "node_name": "new", "kind": "linux", "image": "alpine:latest"}
+
+        responses = (
+            self.client.post(self._get_list_url(), payload, format="json", **self.header),
+            self.client.patch(self._get_detail_url(node), {"state": "exited"}, format="json", **self.header),
+            self.client.delete(self._get_detail_url(node), **self.header),
+        )
+
+        for response in responses:
+            self.assertHttpStatus(response, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_filter_by_lab_stub_and_device(self):
+        self.add_permissions("containerlab_orchestrator.view_labnode")
+        for query, expected in (
+            (f"lab={self.labs[0].pk}", ["leaf1", "spine1", "stub-wan1"]),
+            ("is_stub=true", ["stub-wan1"]),
+            ("device=leaf1", ["leaf1", "leaf1"]),
+        ):
+            with self.subTest(query=query):
+                response = self.client.get(f"{self._get_list_url()}?{query}", **self.header)
+                self.assertHttpStatus(response, status.HTTP_200_OK)
+                self.assertEqual(sorted(row["node_name"] for row in response.data["results"]), expected)
+
+    def test_get_absolute_url_for_api_gives_row_url(self):
+        node = LabNode.objects.get(node_name="stub-wan1")
+        self.assertTrue(node.get_absolute_url(api=True).endswith(f"/lab-nodes/{node.pk}/"))
 
 
 class LabCsvImportJobTestCase(TransactionTestCase):
