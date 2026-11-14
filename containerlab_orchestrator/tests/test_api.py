@@ -3,7 +3,8 @@
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
-from nautobot.apps.testing import APIViewTestCases
+from nautobot.apps.choices import JobResultStatusChoices
+from nautobot.apps.testing import APIViewTestCases, TransactionTestCase, create_job_result_and_run_job
 from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, Status
 from rest_framework import status
@@ -324,3 +325,28 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
             with self.subTest(field=field, value=value):
                 errors = self._post_lab(status.HTTP_400_BAD_REQUEST, **{"name": "api-bad", field: value})
                 self.assertEqual(errors, {field: [message]})
+
+
+class LabCsvImportJobTestCase(TransactionTestCase):
+    """Run the CSV import system job on Lab.
+
+    The job writes its log through a second database connection, so this test commits its data.
+    """
+
+    def test_csv_import_rejects_each_lab_row(self):
+        clab01 = create_containerlab_hosts()[0]
+        csv_data = f"name,host,mgmt_subnet\nimport-lab,{clab01.pk},192.168.40.0/24"
+
+        job_result = create_job_result_and_run_job(
+            "nautobot.core.jobs",
+            "ImportObjects",
+            content_type=ContentType.objects.get_for_model(Lab).pk,
+            csv_data=csv_data,
+        )
+
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertIn(
+            "Row 1: `non_field_errors`: `Use the add form or the REST API to add a lab.`",
+            " ".join(job_result.job_log_entries.values_list("message", flat=True)),
+        )
+        self.assertFalse(Lab.objects.filter(name="import-lab").exists())
