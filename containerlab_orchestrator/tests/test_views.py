@@ -566,6 +566,18 @@ class NodeMappingInterfacePanelTestCase(TestCase):
         self.assertNotContains(response, "GigabitEthernet0/10")
         self.assertEditInterfacesLink(response, self.nokia)
 
+    @override_settings(PAGINATE_COUNT=2)
+    def test_panel_shows_all_rows_when_rows_exceed_page_size(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.get_detail_page()
+
+        for physical_name in ARISTA_PHYSICAL_NAMES:
+            with self.subTest(physical_name=physical_name):
+                self.assertBodyContains(response, physical_name)
+
     def test_panel_hides_edit_button_without_change_permission(self):
         self.add_permissions(
             "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
