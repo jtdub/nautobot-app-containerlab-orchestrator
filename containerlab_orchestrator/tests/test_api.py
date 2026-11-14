@@ -331,6 +331,18 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
                 errors = self._post_lab(status.HTTP_400_BAD_REQUEST, **{"name": "api-bad", field: value})
                 self.assertEqual(errors, {field: [message]})
 
+    def test_owner_shows_no_user_data_except_the_username(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+        for depth, expected_keys in (
+            (0, {"id", "object_type", "url"}),
+            (2, {"id", "object_type", "url", "display", "username"}),
+        ):
+            with self.subTest(depth=depth):
+                response = self.client.get(f"{self._get_detail_url(self.labs[0])}?depth={depth}", **self.header)
+                self.assertHttpStatus(response, status.HTTP_200_OK)
+                self.assertEqual(set(response.data["owner"]), expected_keys)
+        self.assertEqual(response.data["owner"]["username"], "alice")
+
 
 class LabNodeAPITestCase(  # pylint: disable=too-many-ancestors
     APIViewTestCases.GetObjectViewTestCase, APIViewTestCases.ListObjectsViewTestCase

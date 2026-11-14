@@ -1,5 +1,6 @@
 """REST API serializers for the containerlab_orchestrator app."""
 
+from django.contrib.auth import get_user_model
 from nautobot.apps.api import (
     BaseModelSerializer,
     NautobotModelSerializer,
@@ -7,6 +8,7 @@ from nautobot.apps.api import (
     ValidatedModelSerializer,
 )
 from rest_framework import serializers
+from rest_framework.utils.field_mapping import get_nested_relation_kwargs
 
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
@@ -48,6 +50,16 @@ class InterfaceMappingSerializer(ValidatedModelSerializer):  # pylint: disable=t
         validators = []
 
 
+class LabOwnerSerializer(BaseModelSerializer):
+    """Read-only serializer that shows a lab owner with the username and no other user data."""
+
+    class Meta:
+        """Meta attributes for LabOwnerSerializer."""
+
+        model = get_user_model()
+        fields = ["id", "object_type", "url", "display", "username"]
+
+
 class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pylint: disable=too-many-ancestors
     """Serializer for Lab.
 
@@ -76,6 +88,12 @@ class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pyl
             attrs["owner"] = lab.owner
             attrs["status"] = lab.status
         return super().validate(attrs)
+
+    def build_nested_field(self, field_name, relation_info, nested_depth):
+        """Show the owner with `LabOwnerSerializer` at each depth, so a lab reader does not see the user record."""
+        if field_name == "owner":
+            return LabOwnerSerializer, get_nested_relation_kwargs(relation_info)
+        return super().build_nested_field(field_name, relation_info, nested_depth)
 
 
 class LabNodeSerializer(BaseModelSerializer):
