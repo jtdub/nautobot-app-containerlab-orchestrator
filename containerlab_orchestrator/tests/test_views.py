@@ -1,22 +1,87 @@
 """Tests for the containerlab_orchestrator web UI."""
 
+import json
+import re
+import unittest
+
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import override_settings
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
 from nautobot.dcim.models import DeviceType, Manufacturer, Platform
+from nautobot.extras.models import ObjectChange
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.tables import InterfaceMappingTable
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_http_secrets_group,
+    create_interface_mappings,
     create_node_mappings,
 )
 
 HOST_LIST_URL_NAME = "plugins:containerlab_orchestrator:containerlabhost_list"
 NODE_MAPPING_LIST_URL_NAME = "plugins:containerlab_orchestrator:nodemapping_list"
+INTERFACE_ROWS_PREFIX = "interface_mappings"
+ARISTA_PHYSICAL_NAMES = ("GigabitEthernet0/1", "GigabitEthernet0/2", "GigabitEthernet0/10")
+NODE_MAPPING_EDIT_PERMISSIONS = (
+    "containerlab_orchestrator.add_nodemapping",
+    "containerlab_orchestrator.change_nodemapping",
+    "containerlab_orchestrator.view_nodemapping",
+    "dcim.view_devicetype",
+)
+
+
+def node_mapping_post_data(mapping, **changes):
+    """Return the edit form POST data of a node mapping, with the given field changes."""
+    data = {
+        "device_type": mapping.device_type_id or "",
+        "platform": mapping.platform_id or "",
+        "kind": mapping.kind,
+        "image": mapping.image,
+        "node_type": mapping.node_type,
+        "cpu": mapping.cpu or "",
+        "memory": mapping.memory,
+        "env": json.dumps(mapping.env),
+        "overrides": json.dumps(mapping.overrides),
+        "config_source": mapping.config_source,
+        "config_template": mapping.config_template,
+    }
+    data.update(changes)
+    return data
+
+
+def formset_post_data(rows, initial_count):
+    """Return the POST data of the interface rows formset for the given row dictionaries."""
+    data = {
+        f"{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS": len(rows),
+        f"{INTERFACE_ROWS_PREFIX}-INITIAL_FORMS": initial_count,
+        f"{INTERFACE_ROWS_PREFIX}-MIN_NUM_FORMS": 0,
+        f"{INTERFACE_ROWS_PREFIX}-MAX_NUM_FORMS": 1000,
+    }
+    for index, row in enumerate(rows):
+        for key in ("id", "node_mapping", "physical_name", "container_name", "DELETE"):
+            data[f"{INTERFACE_ROWS_PREFIX}-{index}-{key}"] = row.get(key, "")
+    return data
+
+
+def existing_row(row, **changes):
+    """Return the POST row dictionary of a saved interface row, with the given changes."""
+    return {
+        "id": row.pk,
+        "node_mapping": row.node_mapping_id,
+        "physical_name": row.physical_name,
+        "container_name": row.container_name,
+        **changes,
+    }
+
+
+def interface_pairs(mapping):
+    """Return the physical and container name pairs of a node mapping, in the model order."""
+    return list(mapping.interface_mappings.values_list("physical_name", "container_name"))
 
 
 class ContainerlabHostViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disable=too-many-ancestors
@@ -266,3 +331,334 @@ class NodeMappingDiscoveryTestCase(TestCase):
         response = self.client.get(reverse("home"))
 
         self.assertNotContains(response, f'href="{reverse(NODE_MAPPING_LIST_URL_NAME)}"')
+
+
+class NodeMappingInterfaceRowsViewTestCase(TestCase):
+    """Test the interface rows on the node mapping create and edit form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        cls.arista, cls.nokia, _ = node_mappings
+        cls.free_device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.create(name="Cisco"), model="CSR1000v"
+        )
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(*NODE_MAPPING_EDIT_PERMISSIONS)
+        self.add_url = reverse("plugins:containerlab_orchestrator:nodemapping_add")
+        self.edit_url = reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.arista.pk})
+
+    def arista_rows(self):
+        """Return the POST row dictionaries of the three saved Arista rows."""
+        return [existing_row(self.arista.interface_mappings.get(physical_name=name)) for name in ARISTA_PHYSICAL_NAMES]
+
+    def edit_post_data(self):
+        """Return an Arista edit POST that keeps row 1, changes row 2, deletes row 3, and adds GigabitEthernet0/3."""
+        first, second, tenth = self.arista_rows()
+        return {
+            **node_mapping_post_data(self.arista),
+            **formset_post_data(
+                [
+                    first,
+                    {**second, "container_name": "eth3"},
+                    {**tenth, "DELETE": "on"},
+                    {"physical_name": "GigabitEthernet0/3", "container_name": "eth4"},
+                ],
+                initial_count=3,
+            ),
+        }
+
+    def test_create_with_two_rows_saves_mapping_and_rows(self):
+        data = {
+            **node_mapping_post_data(self.arista, device_type=self.free_device_type.pk),
+            **formset_post_data(
+                [
+                    {"physical_name": "GigabitEthernet1", "container_name": "eth1"},
+                    {"physical_name": "GigabitEthernet2", "container_name": "eth2"},
+                ],
+                initial_count=0,
+            ),
+        }
+
+        response = self.client.post(self.add_url, data)
+
+        self.assertHttpStatus(response, 302)
+        mapping = NodeMapping.objects.get(device_type=self.free_device_type)
+        self.assertEqual(interface_pairs(mapping), [("GigabitEthernet1", "eth1"), ("GigabitEthernet2", "eth2")])
+
+    def test_edit_changes_deletes_and_adds_rows(self):
+        response = self.client.post(self.edit_url, self.edit_post_data())
+
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(
+            interface_pairs(self.arista),
+            [("GigabitEthernet0/1", "eth1"), ("GigabitEthernet0/2", "eth3"), ("GigabitEthernet0/3", "eth4")],
+        )
+
+    def test_edit_with_duplicate_new_rows_shows_formset_error_and_saves_nothing(self):
+        duplicates = {
+            "physical_name": [("GigabitEthernet0/20", "eth20"), ("GigabitEthernet0/20", "eth21")],
+            "container_name": [("GigabitEthernet0/20", "eth20"), ("GigabitEthernet0/21", "eth20")],
+        }
+        before = interface_pairs(self.arista)
+        for field_name, pairs in duplicates.items():
+            with self.subTest(field_name=field_name):
+                new_rows = [{"physical_name": physical, "container_name": container} for physical, container in pairs]
+                data = {
+                    **node_mapping_post_data(self.arista, image="ceos:4.99.0F"),
+                    **formset_post_data(self.arista_rows() + new_rows, initial_count=3),
+                }
+
+                response = self.client.post(self.edit_url, data)
+
+                self.assertHttpStatus(response, 200)
+                self.assertBodyContains(response, "Please correct the duplicate data for")
+                self.assertEqual(interface_pairs(self.arista), before)
+                self.arista.refresh_from_db()
+                self.assertEqual(self.arista.image, "ceos:4.32.0F")
+
+    def test_create_with_bad_container_name_shows_row_error_and_saves_nothing(self):
+        data = {
+            **node_mapping_post_data(self.arista, device_type=self.free_device_type.pk),
+            **formset_post_data([{"physical_name": "GigabitEthernet1", "container_name": "eth 1"}], initial_count=0),
+        }
+
+        response = self.client.post(self.add_url, data)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Fix the errors in the interface rows.")
+        self.assertBodyContains(
+            response, "The container interface name must contain only printable characters and no spaces."
+        )
+        self.assertBodyContains(response, 'value="eth 1"')
+        self.assertFalse(NodeMapping.objects.filter(device_type=self.free_device_type).exists())
+
+    def test_edit_with_bad_kind_keeps_typed_rows(self):
+        data = {
+            **node_mapping_post_data(self.arista, kind="Ceos"),
+            **formset_post_data(
+                self.arista_rows() + [{"physical_name": "GigabitEthernet0/3", "container_name": "eth4"}],
+                initial_count=3,
+            ),
+        }
+
+        response = self.client.post(self.edit_url, data)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "start with a letter.")
+        self.assertBodyContains(response, 'value="GigabitEthernet0/3"')
+        self.assertFalse(self.arista.interface_mappings.filter(physical_name="GigabitEthernet0/3").exists())
+
+    def test_edit_with_bad_kind_and_no_formset_data_has_no_management_form_error(self):
+        response = self.client.post(self.edit_url, node_mapping_post_data(self.arista, kind="Ceos"))
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "start with a letter.")
+        self.assertNotContains(response, "ManagementForm data is missing")
+
+    @unittest.skipUnless(
+        connection.vendor == "mysql", "Only the MySQL default collation ignores case in a unique index."
+    )
+    def test_new_rows_that_differ_only_in_case_show_error_on_mysql(self):
+        data = {
+            **node_mapping_post_data(self.nokia),
+            **formset_post_data(
+                [
+                    {"physical_name": "ethernet-1/1", "container_name": "eth1"},
+                    {"physical_name": "ethernet-1/2", "container_name": "ETH1"},
+                ],
+                initial_count=0,
+            ),
+        }
+
+        response = self.client.post(
+            reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": self.nokia.pk}), data
+        )
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Names that differ only in case or accent count as the same name.")
+        self.assertFalse(self.nokia.interface_mappings.exists())
+
+    def test_add_page_shows_one_empty_interface_row(self):
+        response = self.client.get(self.add_url)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS" value="1"')
+        self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-0-physical_name"')
+
+    def test_edit_page_row_inputs_have_no_browser_required_check(self):
+        response = self.client.get(self.edit_url)
+
+        row_input_pattern = rf'<input[^>]*name="{INTERFACE_ROWS_PREFIX}-\d+-(?:physical|container)_name"[^>]*>'
+        row_inputs = re.findall(row_input_pattern, response.content.decode())
+        self.assertEqual(len(row_inputs), 8)
+        for row_input in row_inputs:
+            with self.subTest(row_input=row_input):
+                self.assertNotIn("required", row_input)
+
+    def test_edit_page_row_script_counts_deleted_rows_and_names_delete_button(self):
+        response = self.client.get(self.edit_url)
+
+        self.assertContains(response, f"const rowCount = $('.dynamic-formset-{INTERFACE_ROWS_PREFIX}').length;")
+        self.assertContains(response, f"$('#id_{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS').val(rowCount);")
+        self.assertContains(response, '<span class="visually-hidden">Delete interface row</span>')
+
+    def test_edit_keeps_new_and_changed_rows_when_an_earlier_row_is_deleted(self):
+        first, second, tenth = self.arista_rows()
+        data = {
+            **node_mapping_post_data(self.arista),
+            **formset_post_data(
+                [
+                    {**first, "DELETE": "on"},
+                    {**second, "container_name": "eth3"},
+                    tenth,
+                    {"physical_name": "GigabitEthernet0/5", "container_name": "eth5"},
+                ],
+                initial_count=3,
+            ),
+        }
+
+        response = self.client.post(self.edit_url, data)
+
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(
+            interface_pairs(self.arista),
+            [("GigabitEthernet0/2", "eth3"), ("GigabitEthernet0/5", "eth5"), ("GigabitEthernet0/10", "eth10")],
+        )
+
+    def test_edit_page_shows_interface_rows(self):
+        response = self.client.get(self.edit_url)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "<strong>Node mapping</strong>")
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertBodyContains(response, 'value="GigabitEthernet0/10"')
+        self.assertBodyContains(response, f'name="{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS"')
+
+    def test_change_log_tab_lists_row_changes_from_the_form(self):
+        self.client.post(self.edit_url, self.edit_post_data())
+        self.add_permissions("extras.view_objectchange")
+
+        response = self.client.get(
+            reverse("plugins:containerlab_orchestrator:nodemapping_changelog", kwargs={"pk": self.arista.pk})
+        )
+
+        self.assertHttpStatus(response, 200)
+        for row_text in ("GigabitEthernet0/2 → eth3", "GigabitEthernet0/3 → eth4", "GigabitEthernet0/10 → eth10"):
+            self.assertBodyContains(response, row_text)
+        row_change = ObjectChange.objects.get(
+            changed_object_type=ContentType.objects.get_for_model(InterfaceMapping),
+            object_repr="GigabitEthernet0/3 → eth4",
+        )
+        self.assertHttpStatus(self.client.get(row_change.get_absolute_url()), 200)
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class NodeMappingInterfacePanelTestCase(TestCase):
+    """Test the Interface Mappings panel on the node mapping detail page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        cls.arista, cls.nokia, _ = node_mappings
+
+    def get_detail_page(self, mapping=None):
+        """Return the response of the detail page of a node mapping, by default the Arista mapping."""
+        return self.client.get((mapping or self.arista).get_absolute_url())
+
+    def assertEditInterfacesLink(self, response, mapping):  # pylint: disable=invalid-name
+        """Assert that one link element holds the edit URL of the mapping and the label Edit interfaces."""
+        edit_url = reverse("plugins:containerlab_orchestrator:nodemapping_edit", kwargs={"pk": mapping.pk})
+        link = re.compile(rf'<a href="{re.escape(edit_url)}"[^>]*>\s*<span[^>]*></span>\s*Edit interfaces\s*</a>')
+        self.assertRegex(response.content.decode(), link)
+
+    def test_panel_shows_rows_and_edit_button_with_change_permission(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping",
+            "containerlab_orchestrator.view_interfacemapping",
+            "containerlab_orchestrator.change_nodemapping",
+        )
+
+        response = self.get_detail_page()
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertBodyContains(response, "GigabitEthernet0/10")
+        self.assertBodyContains(response, "eth10")
+        self.assertEditInterfacesLink(response, self.arista)
+
+    def test_panel_of_mapping_with_no_rows_shows_empty_table_and_edit_button(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping",
+            "containerlab_orchestrator.view_interfacemapping",
+            "containerlab_orchestrator.change_nodemapping",
+        )
+
+        response = self.get_detail_page(self.nokia)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertNotContains(response, "GigabitEthernet0/10")
+        self.assertEditInterfacesLink(response, self.nokia)
+
+    @override_settings(PAGINATE_COUNT=2)
+    def test_panel_shows_all_rows_when_rows_exceed_page_size(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.get_detail_page()
+
+        for physical_name in ARISTA_PHYSICAL_NAMES:
+            with self.subTest(physical_name=physical_name):
+                self.assertBodyContains(response, physical_name)
+
+    def test_panel_sorts_rows_by_the_sort_parameter(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.client.get(self.arista.get_absolute_url(), {"sort": "-physical_name"})
+
+        body = response.content.decode()
+        self.assertLess(body.index("GigabitEthernet0/10"), body.index("GigabitEthernet0/2"))
+
+    def test_panel_hides_edit_button_without_change_permission(self):
+        self.add_permissions(
+            "containerlab_orchestrator.view_nodemapping", "containerlab_orchestrator.view_interfacemapping"
+        )
+
+        response = self.get_detail_page()
+
+        self.assertBodyContains(response, "GigabitEthernet0/10")
+        self.assertNotContains(response, "Edit interfaces")
+
+    def test_panel_hides_rows_without_interface_view_permission(self):
+        self.add_permissions("containerlab_orchestrator.view_nodemapping")
+
+        response = self.get_detail_page()
+
+        self.assertBodyContains(response, "Interface Mappings")
+        self.assertNotContains(response, "GigabitEthernet0/10")
+
+
+class InterfaceMappingTableTestCase(TestCase):
+    """Test the sort order of the interface rows table."""
+
+    def test_sort_by_physical_name_uses_natural_interface_order(self):
+        node_mappings = create_node_mappings()
+        create_interface_mappings(node_mappings)
+        arista = node_mappings[0]
+        for order_by, expected in (
+            ("physical_name", list(ARISTA_PHYSICAL_NAMES)),
+            ("-physical_name", list(reversed(ARISTA_PHYSICAL_NAMES))),
+        ):
+            with self.subTest(order_by=order_by):
+                table = InterfaceMappingTable(arista.interface_mappings.all(), order_by=order_by)
+
+                self.assertEqual([row.record.physical_name for row in table.rows], expected)

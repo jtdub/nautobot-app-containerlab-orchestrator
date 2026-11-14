@@ -1,10 +1,26 @@
 """Views for the containerlab_orchestrator app."""
 
-from nautobot.apps.ui import ObjectDetailContent, ObjectFieldsPanel, ObjectTextPanel, SectionChoices
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
+from nautobot.apps.ui import (
+    Button,
+    ObjectDetailContent,
+    ObjectFieldsPanel,
+    ObjectsTablePanel,
+    ObjectTextPanel,
+    SectionChoices,
+)
 from nautobot.apps.views import NautobotUIViewSet
 
 from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
+
+INTERFACE_ROWS_PREFIX = "interface_mappings"
+
+
+def _has_interface_rows(request):
+    """Return True when the POST of the request holds the interface rows formset."""
+    return f"{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS" in request.POST
 
 
 class ContainerlabHostUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
@@ -47,6 +63,26 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
                 section=SectionChoices.LEFT_HALF,
                 fields=["device_type", "platform", "kind", "image", "node_type", "cpu", "memory", "config_source"],
             ),
+            ObjectsTablePanel(
+                weight=200,
+                section=SectionChoices.LEFT_HALF,
+                table_class=tables.InterfaceMappingTable,
+                table_filter="node_mapping",
+                table_title="Interface Mappings",
+                add_button_route=None,
+                enable_related_link=False,
+                max_display_count=1000,
+                show_table_config_button=False,
+                footer_buttons=(
+                    Button(
+                        weight=100,
+                        label="Edit interfaces",
+                        icon="mdi-pencil",
+                        link_name="plugins:containerlab_orchestrator:nodemapping_edit",
+                        required_permissions=["containerlab_orchestrator.change_nodemapping"],
+                    ),
+                ),
+            ),
             ObjectTextPanel(
                 weight=100,
                 section=SectionChoices.RIGHT_HALF,
@@ -70,3 +106,37 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
             ),
         ),
     )
+
+    def get_extra_context(self, request, instance=None):
+        """Add the interface rows formset to the create and edit pages."""
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            data = request.POST if _has_interface_rows(request) else None
+            context[INTERFACE_ROWS_PREFIX] = forms.InterfaceMappingFormSet(
+                data=data, instance=instance, prefix=INTERFACE_ROWS_PREFIX
+            )
+        return context
+
+    def form_save(self, form, **kwargs):
+        """Save the node mapping and, when the POST holds them, its interface rows.
+
+        Raises:
+            ValidationError: If a row is not valid, or if the database rejects a row as a duplicate.
+        """
+        obj = super().form_save(form, **kwargs)
+        if not _has_interface_rows(self.request):
+            return obj
+        interface_rows = forms.InterfaceMappingFormSet(
+            data=self.request.POST, instance=obj, prefix=INTERFACE_ROWS_PREFIX
+        )
+        if not interface_rows.is_valid():
+            raise ValidationError("Fix the errors in the interface rows.")
+        try:
+            with transaction.atomic():
+                interface_rows.save()
+        except IntegrityError as error:
+            raise ValidationError(
+                "Two interface rows have the same name. "
+                "Names that differ only in case or accent count as the same name."
+            ) from error
+        return obj
