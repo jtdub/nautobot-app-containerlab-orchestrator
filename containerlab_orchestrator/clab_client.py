@@ -12,8 +12,7 @@ from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSec
 from nautobot.apps.config import get_app_settings_or_config
 from nautobot.apps.exceptions import SecretError
 
-APP_NAME = "containerlab_orchestrator"
-"""The name of this app in PLUGINS_CONFIG."""
+from containerlab_orchestrator.constants import APP_NAME
 
 CONNECT_TIMEOUT = 10
 """Seconds to wait for the TCP and TLS connection to the server."""
