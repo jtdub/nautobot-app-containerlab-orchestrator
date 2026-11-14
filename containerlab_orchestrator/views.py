@@ -140,3 +140,39 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
                 "Names that differ only in case or accent count as the same name."
             ) from error
         return obj
+
+
+class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
+    """List, detail, create, edit, and delete pages for Lab.
+
+    The list page has no Import button, because the CSV import rejects each lab row.
+    """
+
+    action_buttons = ("add", "export")
+    bulk_update_form_class = forms.LabBulkEditForm
+    filterset_class = filters.LabFilterSet
+    filterset_form_class = forms.LabFilterForm
+    form_class = forms.LabForm
+    queryset = models.Lab.objects.select_related("host", "owner", "status", "dynamic_group")
+    serializer_class = serializers.LabSerializer
+    table_class = tables.LabTable
+
+    object_detail_content = ObjectDetailContent(
+        panels=(
+            ObjectFieldsPanel(
+                weight=100,
+                section=SectionChoices.LEFT_HALF,
+                fields=["name", "host", "owner", "status", "config_source", "mgmt_subnet", "built_at"],
+            ),
+        ),
+    )
+
+    def form_save(self, form, **kwargs):
+        """Save the lab. On create, make the user the owner and set the Planned status.
+
+        Raises:
+            ValidationError: If the Planned status is not available for labs.
+        """
+        if not form.instance.present_in_database:
+            form.instance.set_create_defaults(self.request.user)
+        return super().form_save(form, **kwargs)
