@@ -79,18 +79,10 @@ query {
   labs {
     name
     mgmt_subnet
-    host {
-      name
-    }
-    status {
-      name
-    }
-    dynamic_group {
-      name
-    }
-    devices {
-      name
-    }
+    host { name }
+    status { name }
+    dynamic_group { name }
+    devices { name }
   }
 }
 """
@@ -101,12 +93,8 @@ query {
     node_name
     is_stub
     mgmt_ipv4
-    device {
-      name
-    }
-    lab {
-      name
-    }
+    device { name }
+    lab { name }
   }
 }
 """
