@@ -1,16 +1,23 @@
 """Tests for the REST API of the app."""
 
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
 from nautobot.apps.testing import APIViewTestCases
-from nautobot.dcim.models import DeviceType, Manufacturer, Platform
+from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
+from nautobot.extras.models import DynamicGroup, Status
 from rest_framework import status
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
+
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
     create_containerlab_hosts,
     create_http_secrets_group,
     create_interface_mappings,
+    create_lab_devices,
+    create_labs,
     create_node_mappings,
     patch_secret_variables,
 )
@@ -227,3 +234,93 @@ class InterfaceMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: 
             (new_row.node_mapping, new_row.physical_name, new_row.container_name),
             (platform_mapping, "ens3", "eth1"),
         )
+
+
+class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot REST API tests and the owner, status, and validation tests on Lab."""
+
+    model = Lab
+    choices_fields = ("config_source",)
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.hosts = create_containerlab_hosts()
+        cls.lab_devices = create_lab_devices()
+        cls.labs = create_labs(cls.hosts, cls.lab_devices)
+        clab03 = cls.hosts[2].pk
+        cls.create_data = [
+            {"name": "api-lab-1", "host": clab03, "mgmt_subnet": "192.168.10.0/24"},
+            {"name": "api-lab-2", "host": clab03, "mgmt_subnet": "192.168.11.0/24", "device_filter": {"role": ["spine"]}},
+            {"name": "api-lab-3", "host": clab03, "mgmt_subnet": "192.168.12.0/24", "config_source": "jinja2"},
+        ]
+        cls.update_data = {"mgmt_subnet": "192.168.20.0/24", "config_source": "jinja2"}
+        cls.bulk_update_data = {"config_source": "none"}
+
+    def _post_lab(self, expected_status, **data):
+        """POST a lab on clab01 with the given fields, check the HTTP status, and return the response data."""
+        self.add_permissions(
+            "containerlab_orchestrator.add_lab",
+            "containerlab_orchestrator.view_containerlabhost",
+            "dcim.view_device",
+            "extras.view_dynamicgroup",
+        )
+        payload = {"host": self.hosts[0].pk, "mgmt_subnet": "192.168.30.0/24", **data}
+        response = self.client.post(self._get_list_url(), payload, format="json", **self.header)
+        self.assertHttpStatus(response, expected_status)
+        return response.data
+
+    def test_create_sets_owner_and_planned_status(self):
+        bob = get_user_model().objects.get(username="bob")
+        data = self._post_lab(
+            status.HTTP_201_CREATED, name="api-owner", owner=bob.pk, status=Status.objects.get(name="Built").pk
+        )
+
+        lab = Lab.objects.get(pk=data["id"])
+        self.assertEqual(lab.owner, self.user)
+        self.assertEqual(lab.status.name, "Planned")
+
+    def test_update_keeps_owner_and_status(self):
+        self.add_permissions("containerlab_orchestrator.change_lab", "containerlab_orchestrator.view_lab")
+        lab_b = self.labs[1]
+        data = {"name": "lab-b2", "owner": self.user.pk, "status": Status.objects.get(name="Deployed").pk}
+
+        response = self.client.patch(self._get_detail_url(lab_b), data, format="json", **self.header)
+
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        lab_b.refresh_from_db()
+        self.assertEqual(lab_b.name, "lab-b2")
+        self.assertEqual(lab_b.owner.username, "bob")
+        self.assertEqual(lab_b.status.name, "Built")
+
+    def test_create_with_devices_and_dynamic_group(self):
+        data = self._post_lab(
+            status.HTTP_201_CREATED,
+            name="api-selection",
+            devices=[self.lab_devices["leaf1"].pk, self.lab_devices["leaf2"].pk],
+            dynamic_group=self.lab_devices["leaf_group"].pk,
+        )
+
+        lab = Lab.objects.get(pk=data["id"])
+        self.assertEqual(set(lab.devices.values_list("name", flat=True)), {"leaf1", "leaf2"})
+        self.assertEqual(lab.dynamic_group, self.lab_devices["leaf_group"])
+
+    def test_duplicate_name_returns_400(self):
+        errors = self._post_lab(status.HTTP_400_BAD_REQUEST, name="LAB-A")
+        self.assertEqual(errors, {"name": ["A lab with this name already exists on this host."]})
+
+        self._post_lab(status.HTTP_201_CREATED, name="lab-b", host=self.hosts[1].pk)
+
+    def test_bad_name_subnet_filter_and_group_return_400(self):
+        location_group = DynamicGroup.objects.create(
+            name="Lab locations", content_type=ContentType.objects.get_for_model(Location)
+        )
+        for field, value, message in (
+            ("name", "lab a", 'Use 1 to 128 letters, digits, "_", or "-".'),
+            ("mgmt_subnet", "172.20.21.1/24", CIDR_MESSAGE),
+            ("mgmt_subnet", "10.0.0.0/31", SIZE_MESSAGE),
+            ("device_filter", ["leaf"], 'Enter a JSON object, for example {"key": "value"}.'),
+            ("dynamic_group", location_group.pk, "Select a Dynamic Group of devices."),
+        ):
+            with self.subTest(field=field, value=value):
+                errors = self._post_lab(status.HTTP_400_BAD_REQUEST, **{"name": "api-bad", field: value})
+                self.assertEqual(errors, {field: [message]})

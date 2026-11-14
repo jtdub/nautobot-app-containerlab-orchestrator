@@ -5,10 +5,16 @@ from nautobot.apps.api import ModelViewSet, NautobotModelViewSet
 from containerlab_orchestrator.api.serializers import (
     ContainerlabHostSerializer,
     InterfaceMappingSerializer,
+    LabSerializer,
     NodeMappingSerializer,
 )
-from containerlab_orchestrator.filters import ContainerlabHostFilterSet, InterfaceMappingFilterSet, NodeMappingFilterSet
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.filters import (
+    ContainerlabHostFilterSet,
+    InterfaceMappingFilterSet,
+    LabFilterSet,
+    NodeMappingFilterSet,
+)
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
 
 
 class ContainerlabHostViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancestors
@@ -35,3 +41,11 @@ class InterfaceMappingViewSet(ModelViewSet):  # pylint: disable=too-many-ancesto
     )
     serializer_class = InterfaceMappingSerializer
     filterset_class = InterfaceMappingFilterSet
+
+
+class LabViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancestors
+    """REST API viewset for Lab."""
+
+    queryset = Lab.objects.select_related("host", "owner", "status", "dynamic_group")
+    serializer_class = LabSerializer
+    filterset_class = LabFilterSet
