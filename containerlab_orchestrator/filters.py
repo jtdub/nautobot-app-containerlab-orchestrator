@@ -1,16 +1,18 @@
 """Filter sets for the containerlab_orchestrator app."""
 
+from django.contrib.auth import get_user_model
 from nautobot.apps.filters import (
     BaseFilterSet,
     ModelMultipleChoiceFilter,
     NaturalKeyOrPKMultipleChoiceFilter,
     NautobotFilterSet,
     SearchFilter,
+    StatusModelFilterSetMixin,
 )
-from nautobot.dcim.models import DeviceType, Platform
-from nautobot.extras.models import SecretsGroup
+from nautobot.dcim.models import Device, DeviceType, Platform
+from nautobot.extras.models import DynamicGroup, SecretsGroup
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
 
 class ContainerlabHostFilterSet(NautobotFilterSet):
@@ -74,4 +76,41 @@ class InterfaceMappingFilterSet(BaseFilterSet):
         """Meta attributes for InterfaceMappingFilterSet."""
 
         model = InterfaceMapping
+        fields = "__all__"
+
+
+class LabFilterSet(StatusModelFilterSetMixin, NautobotFilterSet):  # pylint: disable=too-many-ancestors
+    """Filter set for Lab."""
+
+    q = SearchFilter(filter_predicates={"name": "icontains", "host__name": "icontains", "mgmt_subnet": "icontains"})
+    host = NaturalKeyOrPKMultipleChoiceFilter(queryset=ContainerlabHost.objects.all(), label="Host (ID or name)")
+    owner = NaturalKeyOrPKMultipleChoiceFilter(
+        queryset=get_user_model().objects.all(),
+        to_field_name="username",
+        label="Owner (ID or username)",
+    )
+    dynamic_group = NaturalKeyOrPKMultipleChoiceFilter(
+        queryset=DynamicGroup.objects.all(),
+        label="Dynamic Group (ID or name)",
+    )
+    devices = NaturalKeyOrPKMultipleChoiceFilter(queryset=Device.objects.all(), label="Devices (ID or name)")
+
+    class Meta:
+        """Meta attributes for LabFilterSet."""
+
+        model = Lab
+        fields = "__all__"
+
+
+class LabNodeFilterSet(BaseFilterSet):
+    """Filter set for LabNode."""
+
+    q = SearchFilter(filter_predicates={"node_name": "icontains", "kind": "icontains", "image": "icontains"})
+    lab = ModelMultipleChoiceFilter(queryset=Lab.objects.all(), label="Lab (ID)")
+    device = NaturalKeyOrPKMultipleChoiceFilter(queryset=Device.objects.all(), label="Device (ID or name)")
+
+    class Meta:
+        """Meta attributes for LabNodeFilterSet."""
+
+        model = LabNode
         fields = "__all__"
