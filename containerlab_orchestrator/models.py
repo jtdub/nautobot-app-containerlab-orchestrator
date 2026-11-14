@@ -2,9 +2,11 @@
 
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models.functions import Lower
 from jinja2 import TemplateError, TemplateSyntaxError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
@@ -15,20 +17,23 @@ from nautobot.apps.models import (
     LaxURLField,
     NaturalOrderingField,
     PrimaryModel,
+    StatusField,
     extras_features,
     naturalize_interface,
 )
 from nautobot.apps.utils import validate_jinja2
-from nautobot.extras.models import SecretsGroup, SecretsGroupAssociation
+from nautobot.extras.models import SecretsGroup, SecretsGroupAssociation, Status
 
-from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
+from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 from containerlab_orchestrator.validators import (
     validate_clab_api_url,
     validate_clab_kind,
+    validate_clab_lab_name,
     validate_clab_memory,
     validate_container_interface_name,
     validate_image_reference,
+    validate_ipv4_network,
     validate_json_object,
     validate_string_map,
     validate_trimmed_name,
@@ -278,3 +283,141 @@ class InterfaceMapping(BaseModel, ChangeLoggedModel):
         except ObjectDoesNotExist:
             node_mapping = None
         return super().to_objectchange(action, related_object=node_mapping, **kwargs)
+
+
+@extras_features("custom_links", "custom_validators", "export_templates", "statuses", "webhooks")
+class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
+    """A saved selection of devices on one containerlab host, with a management subnet and a status.
+
+    Code that makes a lab calls `set_create_defaults()` or sets a status before `validated_save()`.
+    """
+
+    name = models.CharField(
+        max_length=CHARFIELD_MAX_LENGTH,
+        validators=[validate_clab_lab_name],
+        help_text="The containerlab lab name, for example dc1-fabric.",
+    )
+    host = models.ForeignKey(
+        to="containerlab_orchestrator.ContainerlabHost",
+        on_delete=models.PROTECT,
+        related_name="labs",
+    )
+    owner = models.ForeignKey(
+        to=settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name="labs",
+    )
+    status = StatusField(editable=False)
+    device_filter = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name="Device filter",
+        help_text='Device filter parameters, for example {"role": ["leaf"]}.',
+    )
+    dynamic_group = models.ForeignKey(
+        to="extras.DynamicGroup",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="labs",
+        verbose_name="Dynamic Group",
+    )
+    devices = models.ManyToManyField(to="dcim.Device", blank=True, related_name="labs")
+    config_source = models.CharField(
+        max_length=50,
+        choices=NodeMappingConfigSourceChoices,
+        default=NodeMappingConfigSourceChoices.NONE,
+        verbose_name="Default config source",
+        help_text="The startup config source of a node whose mapping has no config source.",
+    )
+    mgmt_subnet = models.CharField(
+        max_length=CHARFIELD_MAX_LENGTH,
+        validators=[validate_ipv4_network],
+        verbose_name="Management subnet",
+        help_text="The IPv4 management network, for example 172.20.21.0/24. The gateway is .1 and the nodes start at .2.",
+    )
+    topology_yaml = models.TextField(blank=True, editable=False, verbose_name="Topology YAML")
+    built_at = models.DateTimeField(null=True, blank=True, editable=False, verbose_name="Built at")
+    last_inspect = models.JSONField(default=dict, blank=True, editable=False, verbose_name="Last inspect")
+
+    class Meta:
+        """Meta attributes for Lab.
+
+        The first constraint gives the natural key. The second one stops a name that differs only in case.
+        """
+
+        ordering = ["host", "name"]
+        verbose_name = "Lab"
+        constraints = [
+            models.UniqueConstraint(fields=["host", "name"], name="containerlab_orchestrator_lab_host_name_unique"),
+            models.UniqueConstraint(
+                Lower("name"),
+                "host",
+                name="containerlab_orchestrator_lab_host_name_ci_unique",
+                violation_error_message="A lab with this name already exists on this host.",
+            ),
+        ]
+
+    def __str__(self):
+        """Return the lab name."""
+        return self.name
+
+    def set_create_defaults(self, user):
+        """Make the user the owner and set the Planned status.
+
+        Raises:
+            ValidationError: If the Planned status is not available for labs.
+        """
+        self.owner = user
+        try:
+            self.status = Status.objects.get_for_model(Lab).get(name=LabStatusChoices.PLANNED)
+        except Status.DoesNotExist as error:
+            raise ValidationError(
+                "The Planned status is not available for labs. Ask an administrator to add it."
+            ) from error
+
+
+class LabNode(BaseModel):
+    """One containerlab node of a lab. The Build and Inspect jobs write the rows, so the model has no change log."""
+
+    lab = models.ForeignKey(
+        to="containerlab_orchestrator.Lab",
+        on_delete=models.CASCADE,
+        related_name="lab_nodes",
+    )
+    device = models.ForeignKey(
+        to="dcim.Device",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lab_nodes",
+    )
+    node_name = models.CharField(max_length=CHARFIELD_MAX_LENGTH, verbose_name="Node name")
+    is_stub = models.BooleanField(default=False, verbose_name="Stub")
+    kind = models.CharField(max_length=CHARFIELD_MAX_LENGTH, validators=[validate_clab_kind])
+    image = models.CharField(max_length=CHARFIELD_MAX_LENGTH, validators=[validate_image_reference])
+    mgmt_ipv4 = models.GenericIPAddressField(protocol="IPv4", null=True, blank=True, verbose_name="Management IPv4")
+    state = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True)
+    container_id = models.CharField(max_length=CHARFIELD_MAX_LENGTH, blank=True, verbose_name="Container ID")
+
+    class Meta:
+        """Meta attributes for LabNode."""
+
+        ordering = ["lab", "node_name"]
+        verbose_name = "Lab node"
+        constraints = [
+            models.UniqueConstraint(fields=["lab", "node_name"], name="containerlab_orchestrator_labnode_name_unique")
+        ]
+
+    def __str__(self):
+        """Return the node name."""
+        return self.node_name
+
+    def get_absolute_url(self, api=False):
+        """Return the REST API URL of the row, or the lab page, because a row has no page of its own."""
+        if api:
+            return super().get_absolute_url(api=True)
+        return self.lab.get_absolute_url()

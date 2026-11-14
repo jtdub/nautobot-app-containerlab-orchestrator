@@ -1,24 +1,28 @@
-"""Tests for the ContainerlabHost, NodeMapping, and InterfaceMapping models."""
+"""Tests for the ContainerlabHost, NodeMapping, InterfaceMapping, Lab, and LabNode models."""
 
 import uuid
 from decimal import Decimal
 from unittest import mock
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import IntegrityError, connection, transaction
 from django.db.models import ProtectedError
 from jinja2 import TemplateError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import ModelTestCases, TestCase
 from nautobot.dcim.models import DeviceType, Manufacturer, Platform
-from nautobot.extras.models import Secret, SecretsGroupAssociation
+from nautobot.extras.models import Secret, SecretsGroupAssociation, Status
 
-from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_http_secrets_group,
     create_interface_mappings,
+    create_lab_devices,
+    create_lab_nodes,
+    create_labs,
     create_node_mappings,
 )
 
@@ -26,6 +30,7 @@ MISSING_USERNAME_MESSAGE = "The Secrets Group must have an HTTP(S) username secr
 MISSING_PASSWORD_MESSAGE = "The Secrets Group must have an HTTP(S) password secret."
 BOTH_TARGETS_MESSAGE = "Set a Device Type or a Platform, but not both."
 NO_TARGET_MESSAGE = "Set a Device Type or a Platform."
+PLANNED_NOT_AVAILABLE_MESSAGE = "The Planned status is not available for labs. Ask an administrator to add it."
 
 
 class ContainerlabHostModelTestCase(ModelTestCases.BaseModelTestCase):
@@ -469,3 +474,134 @@ class InterfaceMappingDeleteTestCase(TestCase):
         Platform.objects.get(name="linux").delete()
         self.assertFalse(InterfaceMapping.objects.filter(physical_name="ens3").exists())
         self.assertEqual(InterfaceMapping.objects.count(), 3)
+
+
+def create_lab_test_data(test_class):
+    """Save the hosts, the lab devices, the labs, and the lab nodes, and keep them on the test class."""
+    test_class.hosts = create_containerlab_hosts()
+    test_class.lab_devices = create_lab_devices()
+    test_class.labs = create_labs(test_class.hosts, test_class.lab_devices)
+    test_class.lab_nodes = create_lab_nodes(test_class.labs, test_class.lab_devices)
+    test_class.planned = Status.objects.get(name=LabStatusChoices.PLANNED)
+
+
+class LabTestCase(TestCase):
+    """Base class with the lab test data."""
+
+    @classmethod
+    def setUpTestData(cls):
+        create_lab_test_data(cls)
+
+
+class LabModelTestCase(ModelTestCases.BaseModelTestCase):
+    """Run the generic Nautobot model tests on Lab."""
+
+    model = Lab
+
+    @classmethod
+    def setUpTestData(cls):
+        create_lab_test_data(cls)
+
+    def test_get_docs_url(self):
+        """Skip the documentation check, because issue #25 adds the lab documentation page."""
+        self.skipTest("The documentation page for this model comes in #25.")
+
+    def test_str_returns_name(self):
+        self.assertEqual(str(self.labs[0]), "lab-a")
+
+    def test_natural_key_is_host_name_and_lab_name(self):
+        self.assertEqual(self.labs[0].natural_key(), ["clab01", "lab-a"])
+        self.assertEqual(Lab.objects.get_by_natural_key("clab01", "lab-a"), self.labs[0])
+
+
+class LabDatabaseRuleTestCase(LabTestCase):
+    """Test the database rules of a lab."""
+
+    def test_database_rejects_name_that_differs_only_in_case_on_same_host(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Lab.objects.create(name="LAB-A", host=self.hosts[0], mgmt_subnet="192.168.2.0/24", status=self.planned)
+        Lab.objects.create(name="LAB-A", host=self.hosts[2], mgmt_subnet="192.168.2.0/24", status=self.planned)
+
+
+class LabCreateDefaultsTestCase(LabTestCase):
+    """Test the owner and the status that a new lab gets."""
+
+    def test_set_create_defaults_sets_owner_and_planned_status(self):
+        alice = self.labs[0].owner
+        lab = Lab(name="new-lab", host=self.hosts[2], mgmt_subnet="192.168.3.0/24")
+        lab.set_create_defaults(alice)
+        self.assertEqual(lab.owner, alice)
+        self.assertEqual(lab.status.name, "Planned")
+        lab.full_clean()
+
+    def test_set_create_defaults_without_planned_status_for_labs_fails(self):
+        self.planned.content_types.remove(ContentType.objects.get_for_model(Lab))
+        lab = Lab(name="new-lab", host=self.hosts[2], mgmt_subnet="192.168.3.0/24")
+        with self.assertRaises(ValidationError) as context:
+            lab.set_create_defaults(self.labs[0].owner)
+        self.assertEqual(context.exception.messages, [PLANNED_NOT_AVAILABLE_MESSAGE])
+
+
+class LabStatusMigrationTestCase(TestCase):
+    """Test the lab statuses that the data migration links."""
+
+    def test_migration_links_the_five_lab_statuses(self):
+        statuses = Status.objects.get_for_model(Lab)
+        self.assertEqual(
+            set(statuses.values_list("name", flat=True)), {"Planned", "Built", "Deployed", "Failed", "Destroyed"}
+        )
+        colors = dict(statuses.filter(name__in=["Built", "Deployed", "Destroyed"]).values_list("name", "color"))
+        self.assertEqual(colors, {"Built": "2196f3", "Deployed": "4caf50", "Destroyed": "9e9e9e"})
+
+
+class LabDeleteTestCase(LabTestCase):
+    """Test what a delete of a related object does to a lab and its nodes."""
+
+    def test_delete_host_with_labs_raises_protected_error(self):
+        with self.assertRaises(ProtectedError):
+            self.hosts[0].delete()
+
+    def test_delete_owner_keeps_lab_without_owner(self):
+        self.labs[0].owner.delete()
+        self.labs[0].refresh_from_db()
+        self.assertIsNone(self.labs[0].owner)
+
+    def test_delete_dynamic_group_keeps_lab_without_group(self):
+        self.lab_devices["leaf_group"].delete()
+        self.labs[1].refresh_from_db()
+        self.assertIsNone(self.labs[1].dynamic_group)
+
+    def test_delete_device_keeps_node_row_without_device(self):
+        self.lab_devices["spine1"].delete()
+        self.assertEqual(self.labs[0].devices.count(), 0)
+        self.assertIsNone(LabNode.objects.get(lab=self.labs[0], node_name="spine1").device)
+
+    def test_delete_lab_deletes_its_node_rows_only(self):
+        self.labs[0].delete()
+        self.assertEqual(LabNode.objects.filter(lab__name="lab-a", lab__host__name="clab01").count(), 0)
+        self.assertTrue(LabNode.objects.filter(lab=self.labs[2], node_name="leaf1").exists())
+
+
+class LabNodeModelTestCase(ModelTestCases.BaseModelTestCase):
+    """Run the generic Nautobot model tests on LabNode."""
+
+    model = LabNode
+
+    @classmethod
+    def setUpTestData(cls):
+        create_lab_test_data(cls)
+
+    def test_get_docs_url(self):
+        """Skip the documentation check, because issue #25 adds the lab documentation page."""
+        self.skipTest("The documentation page for this model comes in #25.")
+
+    def test_str_returns_node_name(self):
+        self.assertEqual(str(self.lab_nodes[0]), "leaf1")
+
+    def test_duplicate_node_name_on_lab_fails_validation(self):
+        node = LabNode(lab=self.labs[0], node_name="leaf1", kind="linux", image="alpine:latest")
+        with self.assertRaises(ValidationError):
+            node.full_clean()
+
+    def test_node_that_is_not_stub_without_device_passes_validation(self):
+        LabNode(lab=self.labs[0], node_name="leaf9", kind="linux", image="alpine:latest").full_clean()

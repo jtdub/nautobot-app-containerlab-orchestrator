@@ -17,3 +17,21 @@ class NodeMappingConfigSourceChoices(ChoiceSet):
         (GOLDEN_CONFIG_INTENDED, "Golden Config intended"),
         (GOLDEN_CONFIG_BACKUP, "Golden Config backup"),
     )
+
+
+class LabStatusChoices(ChoiceSet):
+    """Names of the statuses of a lab."""
+
+    PLANNED = "Planned"
+    BUILT = "Built"
+    DEPLOYED = "Deployed"
+    FAILED = "Failed"
+    DESTROYED = "Destroyed"
+
+    CHOICES = (
+        (PLANNED, PLANNED),
+        (BUILT, BUILT),
+        (DEPLOYED, DEPLOYED),
+        (FAILED, FAILED),
+        (DESTROYED, DESTROYED),
+    )

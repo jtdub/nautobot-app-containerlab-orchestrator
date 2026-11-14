@@ -3,13 +3,15 @@
 import os
 from unittest import mock
 
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
-from nautobot.dcim.models import DeviceType, Manufacturer, Platform
-from nautobot.extras.models import Secret, SecretsGroup, SecretsGroupAssociation
+from nautobot.dcim.models import Device, DeviceType, Location, LocationType, Manufacturer, Platform
+from nautobot.extras.models import DynamicGroup, Role, Secret, SecretsGroup, SecretsGroupAssociation, Status
 
-from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
+from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
 SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the REST API and GraphQL must never return."""
@@ -111,4 +113,104 @@ def create_interface_mappings(node_mappings):
     return [
         InterfaceMapping.objects.create(node_mapping=node_mapping, physical_name=physical, container_name=container)
         for node_mapping, physical, container in pairs
+    ]
+
+
+def create_lab_devices():
+    """Return the saved devices leaf1, leaf2, and spine1, and the Dynamic Groups leaf_group and spine_group."""
+    device_content_type = ContentType.objects.get_for_model(Device)
+    location_type = LocationType.objects.create(name="Lab site type")
+    location_type.content_types.add(device_content_type)
+    active = Status.objects.get_for_model(Device).get(name="Active")
+    location = Location.objects.create(name="Lab site", location_type=location_type, status=active)
+    roles = {}
+    for role_name in ("leaf", "spine"):
+        roles[role_name] = Role.objects.create(name=role_name)
+        roles[role_name].content_types.add(device_content_type)
+    device_type = DeviceType.objects.create(
+        manufacturer=Manufacturer.objects.create(name="Lab vendor"), model="Lab switch"
+    )
+    lab_devices = {
+        name: Device.objects.create(
+            name=name, device_type=device_type, location=location, status=active, role=roles[role_name]
+        )
+        for name, role_name in (("leaf1", "leaf"), ("leaf2", "leaf"), ("spine1", "spine"))
+    }
+    for role_name in ("leaf", "spine"):
+        lab_devices[f"{role_name}_group"] = DynamicGroup.objects.create(
+            name=f"{role_name.capitalize()} devices",
+            content_type=device_content_type,
+            filter={"role": [role_name]},
+        )
+    return lab_devices
+
+
+def create_labs(hosts, lab_devices):
+    """Return three saved labs: lab-a and lab-b on clab01, and lab-a on clab02, each with a different owner."""
+    statuses = {status.name: status for status in Status.objects.get_for_model(Lab)}
+    alice, bob, carol = (get_user_model().objects.create_user(username=name) for name in ("alice", "bob", "carol"))
+    lab_a = Lab.objects.create(
+        name="lab-a",
+        host=hosts[0],
+        owner=alice,
+        status=statuses[LabStatusChoices.PLANNED],
+        mgmt_subnet="172.20.21.0/24",
+        device_filter={"role": ["leaf"]},
+        config_source=NodeMappingConfigSourceChoices.NONE,
+    )
+    lab_a.devices.set([lab_devices["spine1"]])
+    lab_b = Lab.objects.create(
+        name="lab-b",
+        host=hosts[0],
+        owner=bob,
+        status=statuses[LabStatusChoices.BUILT],
+        mgmt_subnet="172.20.22.0/28",
+        dynamic_group=lab_devices["leaf_group"],
+        config_source=NodeMappingConfigSourceChoices.JINJA2,
+    )
+    lab_b.devices.set([lab_devices["leaf2"]])
+    lab_a_clab02 = Lab.objects.create(
+        name="lab-a",
+        host=hosts[1],
+        owner=carol,
+        status=statuses[LabStatusChoices.DEPLOYED],
+        mgmt_subnet="10.10.0.0/30",
+        dynamic_group=lab_devices["spine_group"],
+        config_source=NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED,
+    )
+    return [lab_a, lab_b, lab_a_clab02]
+
+
+def create_lab_nodes(labs, lab_devices):
+    """Return five saved node rows: three on lab-a of clab01, one on lab-b, and one on lab-a of clab02."""
+    lab_a, lab_b, lab_a_clab02 = labs
+    ceos = ("ceos", "ceos:4.32.0F")
+    rows = (
+        (lab_a, "leaf1", "leaf1", ceos, "172.20.21.2", "running", "a1b2c3"),
+        (lab_a, "spine1", "spine1", ceos, "172.20.21.3", "running", "d4e5f6"),
+        (lab_a, "stub-wan1", None, ("linux", "alpine:latest"), "172.20.21.4", "running", "0a0b0c"),
+        (lab_b, "leaf2", "leaf2", ceos, "172.20.22.2", "exited", "111111"),
+        (
+            lab_a_clab02,
+            "leaf1",
+            "leaf1",
+            ("nokia_srlinux", "ghcr.io/nokia/srlinux:24.10"),
+            "10.10.0.2",
+            "running",
+            "222222",
+        ),
+    )
+    return [
+        LabNode.objects.create(
+            lab=lab,
+            node_name=node_name,
+            device=lab_devices.get(device_name),
+            is_stub=device_name is None,
+            kind=kind,
+            image=image,
+            mgmt_ipv4=mgmt_ipv4,
+            state=state,
+            container_id=container_id,
+        )
+        for lab, node_name, device_name, (kind, image), mgmt_ipv4, state, container_id in rows
     ]
