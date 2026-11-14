@@ -1,0 +1,71 @@
+{% extends 'generic/object_create.html' %}
+{% load form_helpers %}
+
+{% block form %}
+    <div class="card">
+        <div class="card-header"><strong>{{ obj_type|capfirst }}</strong></div>
+        <div class="card-body">
+            {% render_form form %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><strong>Interface Mappings</strong></div>
+        <div class="card-body overflow-auto">
+            {{ interface_mappings.management_form }}
+            {% if interface_mappings.non_form_errors %}
+                <div class="text-danger">{{ interface_mappings.non_form_errors }}</div>
+            {% endif %}
+            <table class="table">
+                {% for row_form in interface_mappings.forms %}
+                    {% if forloop.first %}
+                        <thead>
+                            <tr>
+                                {% for field in row_form.visible_fields %}
+                                    <th>{{ field.label|capfirst }}</th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                    {% endif %}
+                    <tr class="formset_row-{{ interface_mappings.prefix }}">
+                        {% for field in row_form.visible_fields %}
+                            <td>
+                                {% if forloop.first %}
+                                    {% for hidden in row_form.hidden_fields %}
+                                        {{ hidden }}
+                                    {% endfor %}
+                                    {% if row_form.non_field_errors %}
+                                        <div class="text-danger">{{ row_form.non_field_errors }}</div>
+                                    {% endif %}
+                                {% endif %}
+                                {{ field }}
+                                {% if field.errors %}
+                                    <ul>
+                                        {% for error in field.errors %}
+                                            <li class="text-danger">{{ error }}</li>
+                                        {% endfor %}
+                                    </ul>
+                                {% endif %}
+                            </td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+    {% include 'inc/extras_features_edit_form_fields.html' %}
+{% endblock form %}
+
+{% block javascript %}
+    {{ block.super }}
+    <script type="text/javascript">
+        $('.formset_row-{{ interface_mappings.prefix }}').formset({
+            addText: '<span class="mdi mdi-plus-thick" aria-hidden="true"></span> Add another interface',
+            addCssClass: 'btn btn-primary add-row',
+            deleteText: '<span class="mdi mdi-trash-can-outline" aria-hidden="true"></span>',
+            deleteCssClass: 'btn btn-danger delete-row',
+            prefix: '{{ interface_mappings.prefix }}',
+            formCssClass: 'dynamic-formset-{{ interface_mappings.prefix }}',
+            added: jsify_form
+        });
+    </script>
+{% endblock javascript %}

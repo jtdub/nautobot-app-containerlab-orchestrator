@@ -1,10 +1,19 @@
 """Views for the containerlab_orchestrator app."""
 
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from nautobot.apps.ui import ObjectDetailContent, ObjectFieldsPanel, ObjectTextPanel, SectionChoices
 from nautobot.apps.views import NautobotUIViewSet
 
 from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
+
+INTERFACE_ROWS_PREFIX = "interface_mappings"
+
+
+def _has_interface_rows(request):
+    """Return True when the POST of the request holds the interface rows formset."""
+    return f"{INTERFACE_ROWS_PREFIX}-TOTAL_FORMS" in request.POST
 
 
 class ContainerlabHostUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
@@ -70,3 +79,26 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
             ),
         ),
     )
+
+    def get_extra_context(self, request, instance=None):
+        """Add the interface rows formset to the create and edit pages."""
+        context = super().get_extra_context(request, instance)
+        if self.action in ("create", "update"):
+            data = request.POST if _has_interface_rows(request) else None
+            context[INTERFACE_ROWS_PREFIX] = forms.InterfaceMappingFormSet(data=data, instance=instance)
+        return context
+
+    def form_save(self, form, **kwargs):
+        """Save the node mapping and, when the POST holds them, its interface rows.
+
+        Raises:
+            ValidationError: If a row is not valid, or if the database rejects a row as a duplicate.
+        """
+        obj = super().form_save(form, **kwargs)
+        if not _has_interface_rows(self.request):
+            return obj
+        interface_rows = forms.InterfaceMappingFormSet(data=self.request.POST, instance=obj)
+        if not interface_rows.is_valid():
+            raise ValidationError("Fix the errors in the interface rows.")
+        interface_rows.save()
+        return obj

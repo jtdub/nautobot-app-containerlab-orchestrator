@@ -3,8 +3,10 @@
 from decimal import Decimal
 
 from django import forms
+from django.forms import inlineformset_factory
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
 from nautobot.apps.forms import (
+    BootstrapMixin,
     BulkEditNullBooleanSelect,
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
@@ -21,7 +23,7 @@ from nautobot.dcim.models import DeviceType, Platform
 from nautobot.extras.models import SecretsGroup
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
 
 
 class ContainerlabHostForm(NautobotModelForm):  # pylint: disable=too-many-ancestors
@@ -98,6 +100,25 @@ class NodeMappingForm(NautobotModelForm):  # pylint: disable=too-many-ancestors
     def clean_overrides(self):
         """Return an empty object when the overrides field is empty."""
         return self.cleaned_data["overrides"] if self.cleaned_data["overrides"] is not None else {}
+
+
+class InterfaceMappingRowForm(BootstrapMixin, forms.ModelForm):
+    """Form for one interface row on the node mapping edit form."""
+
+    class Meta:
+        """Meta attributes for InterfaceMappingRowForm."""
+
+        model = InterfaceMapping
+        fields = ("physical_name", "container_name")
+
+
+InterfaceMappingFormSet = inlineformset_factory(
+    parent_model=NodeMapping,
+    model=InterfaceMapping,
+    form=InterfaceMappingRowForm,
+    fields=("physical_name", "container_name"),
+    extra=1,
+)
 
 
 class NodeMappingBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: disable=too-many-ancestors
