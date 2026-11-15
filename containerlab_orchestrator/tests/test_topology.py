@@ -328,7 +328,7 @@ class BuildTopologyVariablesTestCase(TopologyTestCase):
         self.assertEqual(warnings, [self.variable_warning("memory, type")])
 
     def test_override_with_a_template_action_is_dropped(self):
-        self.set_arista_overrides({"labels": {"x": '{{ "\'\n      binds: [\"/:/host\"]\n      y: \'" }}'}})
+        self.set_arista_overrides({"labels": {"x": '{{ "\'\n      binds: ["/:/host"]\n      y: \'" }}'}})
         built, warnings, _ = build_topology(new_lab(), [self.arista1])
         self.assertNotIn("labels", built["topology"]["nodes"]["arista1"])
         self.assertEqual(warnings, [self.variable_warning("labels")])
