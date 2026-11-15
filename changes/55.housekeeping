@@ -1,0 +1,1 @@
+Added a check to the topology builder that drops node settings which act on the host or read host environment variables.
