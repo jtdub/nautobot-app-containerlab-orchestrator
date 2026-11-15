@@ -31,10 +31,14 @@ because the builder and the startup config own them.
 Trust boundary: a user with the add or change permission on NodeMapping writes overrides. A different user can build
 and deploy the lab. Keys such as binds and exec act on the containerlab host, so the builder drops them.
 
-Variables: containerlab replaces a $var or ${var} anywhere in the topology with a value from the host environment. The
-env entry __IMPORT_ENVS imports all host variables. So the builder also drops each value with a $ and each
-__IMPORT_ENVS entry, from the overrides and from the mapping fields.
+Variables: containerlab runs the topology file as a Go template, so a {{ action can write any text into it. Then
+containerlab replaces a $var or ${var} with a value from the host environment. The env entry __IMPORT_ENVS imports all
+host variables. So the builder also drops each value with a $ or a {{, and each __IMPORT_ENVS entry. This applies to
+the overrides and to the mapping fields.
 """
+
+HOST_VARIABLE_MARKERS = ("$", "{{")
+"""The text that makes containerlab change a value: a shell variable or a Go template action."""
 
 IMPORT_ENVS_KEY = "__IMPORT_ENVS"
 """The env entry that makes containerlab import all environment variables of the host into the node."""
@@ -58,16 +62,17 @@ W_OVERRIDE = "Mapping {mapping}: the overrides keys {keys} are not allowed. The 
 """The warning for the overrides keys of a node mapping that are not in OVERRIDE_KEYS."""
 
 W_VARIABLE = (
-    "Mapping {mapping}: the keys {keys} have a $, and containerlab replaces a $ variable with a value from the host. "
-    "The builder dropped them."
+    "Mapping {mapping}: the keys {keys} have a $ variable or a Go template action, which containerlab replaces "
+    "before it reads the topology. The builder dropped them."
 )
-"""The warning for the node keys and env entries of a mapping that containerlab fills from the host environment."""
+"""The warning for the node keys and env entries of a mapping with a marker of HOST_VARIABLE_MARKERS."""
 
 KIND_VARIABLE_MESSAGE = (
-    "Mapping {mapping}: the kind has a $. Remove the $, because containerlab replaces a $ variable with a value from "
-    "the host."
+    "Mapping {mapping}: the kind has a $ variable or a Go template action. Remove it, because containerlab replaces "
+    "it before it reads the topology."
 )
-"""The error for a mapping kind with a $. A node with no kind is not valid, so the builder does not drop it."""
+"""The error for a mapping kind with a host variable marker. A node with no kind is not valid, so the builder does not
+drop it."""
 
 
 def _node_order(device):
@@ -128,9 +133,9 @@ def _merge(node, overrides):
 
 
 def _has_variable(value):
-    """Return True if a string, a dict key, or a list item at any depth of the value has a $."""
+    """Return True if a string, a dict key, or a list item at any depth of the value has a host variable marker."""
     if isinstance(value, str):
-        return "$" in value
+        return any(marker in value for marker in HOST_VARIABLE_MARKERS)
     if isinstance(value, dict):
         return any(_has_variable(key) or _has_variable(item) for key, item in value.items())
     if isinstance(value, list):
@@ -165,7 +170,7 @@ def _apply_overrides(node, mapping, warnings, warned_pks):
     Add one W_OVERRIDE and one W_VARIABLE warning for each mapping pk, when it drops a key. The pks are in warned_pks.
 
     Raises:
-        ValidationError: If the kind of the mapping has a $.
+        ValidationError: If the kind of the mapping has a marker of HOST_VARIABLE_MARKERS.
     """
     if _has_variable(mapping.kind):
         raise ValidationError(KIND_VARIABLE_MESSAGE.format(mapping=mapping))
@@ -208,7 +213,7 @@ def build_topology(lab, devices):
     The caller gives only the devices that the user can view.
 
     Raises:
-        ValidationError: If the lab name or the subnet is not valid, the device list is empty, or a kind has a $.
+        ValidationError: If the lab name or the subnet is not valid, the device list is empty, or a kind has a marker.
         ImproperlyConfigured: If a device has no mapping and the default_node_mapping setting is not valid.
     """
     if not CLAB_NAME_PATTERN.fullmatch(lab.name or ""):

@@ -319,11 +319,39 @@ class BuildTopologyVariablesTestCase(TopologyTestCase):
         self.assertNotIn("env", built["topology"]["nodes"]["arista1"])
         self.assertEqual(warnings, [self.variable_warning("env.__IMPORT_ENVS")])
 
+    def test_mapping_type_and_memory_with_a_variable_are_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(node_type="${TYPE}", memory="${MEMORY}")
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("type", node)
+        self.assertNotIn("memory", node)
+        self.assertEqual(warnings, [self.variable_warning("memory, type")])
+
+    def test_override_with_a_template_action_is_dropped(self):
+        self.set_arista_overrides({"labels": {"x": '{{ "\'\n      binds: [\"/:/host\"]\n      y: \'" }}'}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertNotIn("labels", built["topology"]["nodes"]["arista1"])
+        self.assertEqual(warnings, [self.variable_warning("labels")])
+
+    def test_mapping_value_with_a_template_action_is_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(
+            image="ceos:{{.Tag}}", env={"A": r'{{"\x24{API_SECRET}"}}', "B": "2"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("image", node)
+        self.assertEqual(node["env"], {"B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.A, image")])
+
     def test_kind_with_a_variable_raises(self):
-        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind="ceos${X}")
-        with self.assertRaises(ValidationError) as context:
-            build_topology(new_lab(), [self.arista1])
-        self.assertEqual(context.exception.messages, [KIND_VARIABLE_MESSAGE.format(mapping=self.arista_mapping)])
+        for kind in ("ceos${X}", "ceos{{.X}}"):
+            with self.subTest(kind=kind):
+                NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind=kind)
+                with self.assertRaises(ValidationError) as context:
+                    build_topology(new_lab(), [self.arista1])
+                self.assertEqual(
+                    context.exception.messages, [KIND_VARIABLE_MESSAGE.format(mapping=self.arista_mapping)]
+                )
 
 
 class TopologyYamlTestCase(TopologyTestCase):
