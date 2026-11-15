@@ -163,16 +163,12 @@ class BuildTopologyNodesTestCase(TopologyTestCase):
         self.assertEqual(built["mgmt"], {"network": "clab-lab-a", "ipv4-subnet": "172.20.21.0/24"})
         nodes = built["topology"]["nodes"]
         self.assertEqual(list(nodes), [f"device-{unnamed.pk.hex[:8]}", "Leaf-1", "leaf0"])
-        self.assertEqual(
-            [node["mgmt-ipv4"] for node in nodes.values()], ["172.20.21.2", "172.20.21.3", "172.20.21.4"]
-        )
+        self.assertEqual([node["mgmt-ipv4"] for node in nodes.values()], ["172.20.21.2", "172.20.21.3", "172.20.21.4"])
 
     def test_subnet_too_small_raises(self):
         with self.assertRaises(ValidationError) as context:
             build_topology(new_lab(mgmt_subnet="10.0.0.0/30"), [self.leaf1, self.leaf2])
-        self.assertEqual(
-            context.exception.message_dict, {"mgmt_subnet": [SUBNET_ROOM_MESSAGE.format(room=1, count=2)]}
-        )
+        self.assertEqual(context.exception.message_dict, {"mgmt_subnet": [SUBNET_ROOM_MESSAGE.format(room=1, count=2)]})
 
     def test_bad_subnet_raises(self):
         with self.assertRaises(ValidationError) as context:

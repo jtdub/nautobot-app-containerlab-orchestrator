@@ -30,9 +30,7 @@ EMPTY_DEVICES_MESSAGE = "Lab {lab} has no device to build."
 LAB_NAME_MESSAGE = "Start the lab name with a letter or a digit, so that containerlab accepts it."
 """The error for a lab name that the containerlab schema does not accept."""
 
-SUBNET_ROOM_MESSAGE = (
-    "Node addresses in the subnet: {room}. Nodes in the topology: {count}. Use a larger subnet."
-)
+SUBNET_ROOM_MESSAGE = "Node addresses in the subnet: {room}. Nodes in the topology: {count}. Use a larger subnet."
 """The error for a subnet that has no address for each node."""
 
 
@@ -97,9 +95,7 @@ def _assign_addresses(lab, names):
     if len(names) > room:
         raise ValidationError({"mgmt_subnet": [SUBNET_ROOM_MESSAGE.format(room=room, count=len(names))]})
     network = ipaddress.IPv4Network(lab.mgmt_subnet)
-    return {
-        name: str(network.network_address + FIRST_NODE_OFFSET + index) for index, name in enumerate(names)
-    }
+    return {name: str(network.network_address + FIRST_NODE_OFFSET + index) for index, name in enumerate(names)}
 
 
 def build_topology(lab, devices):
