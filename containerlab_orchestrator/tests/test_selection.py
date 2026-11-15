@@ -20,8 +20,8 @@ SHAPE_MESSAGE = "role: Use a value or a list of values."
 
 
 @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
-class SelectDevicesTestCase(TestCase):
-    """Test select_devices and validate_device_filter."""
+class SelectionTestCase(TestCase):
+    """Base class with the data and the helpers for the device selection tests."""
 
     @classmethod
     def setUpTestData(cls):
@@ -64,6 +64,10 @@ class SelectDevicesTestCase(TestCase):
         """Return a saved Dynamic Group of devices."""
         return DynamicGroup.objects.create(name=name, content_type=self.device_content_type, **kwargs)
 
+
+class SelectDevicesTestCase(SelectionTestCase):  # pylint: disable=too-many-ancestors
+    """Test the devices that select_devices gives for each source and each user."""
+
     def test_device_filter_alone_selects_its_devices(self):
         self.assert_selects(self.make_lab(device_filter={"role": ["leaf"]}), {"leaf1", "leaf2"})
 
@@ -96,6 +100,34 @@ class SelectDevicesTestCase(TestCase):
         )
         self.assertNotIn(leaf3, self.lab_devices["leaf_group"].members)
         self.assert_selects(self.lab_b, {"leaf1", "leaf2", "leaf3"})
+
+    def test_concurrent_refresh_uses_cached_members(self):
+        with mock.patch.object(DynamicGroup, "update_cached_members", side_effect=IntegrityError):
+            self.assert_selects(self.lab_b, {"leaf1", "leaf2"})
+
+    def test_user_sees_only_devices_they_can_view(self):
+        self.add_permissions("dcim.view_device")
+        self.assert_selects(self.make_lab(devices=[self.lab_devices["leaf1"]]), {"leaf1"}, user=self.user)
+
+    def test_hidden_devices_raise_error(self):
+        self.add_permissions("dcim.view_device", constraints={"name": "leaf1"})
+        self.assert_select_messages(
+            self.lab_a, ["You cannot view 2 of the devices that lab lab-a selects."], user=self.user
+        )
+
+    def test_user_without_view_permission_gets_empty_selection_error(self):
+        self.assert_select_messages(
+            self.lab_a,
+            ["The device filter, the Dynamic Group, and the devices of lab lab-a select no device."],
+            user=self.user,
+        )
+
+    def test_no_user_applies_no_limit(self):
+        self.assert_selects(self.lab_a, {"leaf1", "leaf2", "spine1"})
+
+
+class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-ancestors
+    """Test the errors of validate_device_filter and select_devices."""
 
     def test_bad_device_filter_raises_filter_errors(self):
         cases = (
@@ -171,27 +203,3 @@ class SelectDevicesTestCase(TestCase):
             with self.subTest(group=group.name):
                 lab = self.make_lab(dynamic_group=group)
                 self.assert_select_errors(lab, {"dynamic_group": [f"{group.name}: This group selects all devices."]})
-
-    def test_concurrent_refresh_uses_cached_members(self):
-        with mock.patch.object(DynamicGroup, "update_cached_members", side_effect=IntegrityError):
-            self.assert_selects(self.lab_b, {"leaf1", "leaf2"})
-
-    def test_user_sees_only_devices_they_can_view(self):
-        self.add_permissions("dcim.view_device")
-        self.assert_selects(self.make_lab(devices=[self.lab_devices["leaf1"]]), {"leaf1"}, user=self.user)
-
-    def test_hidden_devices_raise_error(self):
-        self.add_permissions("dcim.view_device", constraints={"name": "leaf1"})
-        self.assert_select_messages(
-            self.lab_a, ["You cannot view 2 of the devices that lab lab-a selects."], user=self.user
-        )
-
-    def test_user_without_view_permission_gets_empty_selection_error(self):
-        self.assert_select_messages(
-            self.lab_a,
-            ["The device filter, the Dynamic Group, and the devices of lab lab-a select no device."],
-            user=self.user,
-        )
-
-    def test_no_user_applies_no_limit(self):
-        self.assert_selects(self.lab_a, {"leaf1", "leaf2", "spine1"})
