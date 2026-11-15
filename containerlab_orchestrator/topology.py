@@ -3,11 +3,15 @@
 import copy
 import ipaddress
 import re
+from typing import NamedTuple
 
 import yaml
 from django.core.exceptions import ValidationError
+from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
+from nautobot.apps.models import naturalize_interface
+from nautobot.dcim.models import Interface
 
-from containerlab_orchestrator.mapper import resolve_mapping
+from containerlab_orchestrator.mapper import map_interfaces, resolve_mapping
 from containerlab_orchestrator.validators import subnet_node_room, validate_ipv4_network
 
 CLAB_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -73,6 +77,44 @@ KIND_VARIABLE_MESSAGE = (
 )
 """The error for a mapping kind with a host variable marker. A node with no kind is not valid, so the builder does not
 drop it."""
+
+CABLE_WARNING = "Device {device}, interface {interface}: {text}"
+"""The form of a cable warning. It names the local end, or the end with no valid container name."""
+
+W_MGMT_ONLY = "the cable is on a management-only interface. The builder skipped it."
+"""The warning for a cable with a management-only end."""
+
+W_NO_FAR_END = "the cable has no far end. The builder skipped it."
+"""The warning for a cable with no termination on the far side."""
+
+W_BREAKOUT = "the cable has more than one far end. The builder skipped it."
+"""The warning for a multi-connector cable, or a cable end with more than one peer."""
+
+W_NOT_INTERFACE = "the cable goes to a {kind}, not to an interface. The builder skipped it."
+"""The warning for a cable to a circuit termination, a front port, or another termination that is not an interface."""
+
+W_NO_FAR_DEVICE = "the cable goes to an interface with no device. The builder skipped it."
+"""The warning for a cable to an interface on a module that is in no module bay."""
+
+W_NO_NAME = "the interface has no container name. The builder skipped its cable."
+"""The warning for a cable on an interface that map_interfaces gives no container name."""
+
+W_NAME_VARIABLE = (
+    "the container name has a $ variable or a Go template action, which containerlab replaces before it reads the "
+    "topology. The builder skipped its cable."
+)
+"""The warning for a cable on an interface whose container name has a marker of HOST_VARIABLE_MARKERS."""
+
+_CABLE_RELATION = "cable_termination" if hasattr(Interface, "get_cable_peers") else "cable"
+"""The Interface relation to its cable: a reverse one-to-one on Nautobot 3.2 and later, else a foreign key."""
+
+
+class CablePair(NamedTuple):
+    """A cable to link: the local interface, the far interface, and True if the far device is in the selection."""
+
+    local: Interface
+    far: Interface
+    internal: bool
 
 
 def _node_order(device):
@@ -207,6 +249,149 @@ def _assign_addresses(lab, names):
     return {name: str(network.network_address + FIRST_NODE_OFFSET + index) for index, name in enumerate(names)}
 
 
+def _interface_key(interface):
+    """Return the key that puts interfaces in natural order of their names."""
+    return (naturalize_interface(interface.name, CHARFIELD_MAX_LENGTH), interface.name, str(interface.pk))
+
+
+def _cabled_interfaces(device):
+    """Return the interfaces of the device and its modules that have a cable, in natural order."""
+    interfaces = device.all_interfaces.filter(**{f"{_CABLE_RELATION}__isnull": False}).select_related("device")
+    if _CABLE_RELATION == "cable_termination":
+        interfaces = interfaces.select_related("cable_termination__cable__cable_type").prefetch_related(
+            "cable_termination__cable__terminations"
+        )
+    return sorted(interfaces, key=_interface_key)
+
+
+def _cable_peers(termination):
+    """Return the far terminations of the cable of the termination."""
+    if hasattr(termination, "get_cable_peers"):
+        return termination.get_cable_peers()
+    peer = termination.get_cable_peer()
+    return [] if peer is None else [peer]
+
+
+def _is_multi_connector(interface):
+    """Return True if the cable of the interface has a cable type with more than one connector on a side."""
+    if _CABLE_RELATION == "cable":
+        return False
+    cable_type = getattr(interface.cable, "cable_type", None)
+    return cable_type is not None and cable_type.is_multi_connector
+
+
+def _add_cable_warning(warnings, interface, text):
+    """Add a cable warning that names the interface and its device."""
+    warnings.append(CABLE_WARNING.format(device=interface.parent, interface=interface.name, text=text))
+
+
+def _skip_text(local, peers):
+    """Return the warning text of the first rule that skips the cable of the local interface, or None."""
+    if local.mgmt_only:
+        return W_MGMT_ONLY
+    if _is_multi_connector(local) or len(peers) > 1:
+        return W_BREAKOUT
+    if not peers:
+        return W_NO_FAR_END
+    if not isinstance(peers[0], Interface):
+        return W_NOT_INTERFACE.format(kind=peers[0]._meta.verbose_name)
+    if peers[0].parent is None:
+        return W_NO_FAR_DEVICE
+    return None
+
+
+def _collect_cables(devices, warnings):
+    """Return a CablePair for each cable of the devices that the builder can link, in node order.
+
+    Add one warning for each cable that it skips.
+    """
+    selected_pks = {device.pk for device in devices}
+    seen_cable_ids = set()
+    candidates = []
+    for device in devices:
+        for local in _cabled_interfaces(device):
+            if local.cable_id in seen_cable_ids:
+                continue
+            seen_cable_ids.add(local.cable_id)
+            peers = _cable_peers(local)
+            text = _skip_text(local, peers)
+            if text:
+                _add_cable_warning(warnings, local, text)
+            else:
+                candidates.append((local, peers[0]))
+    pairs = []
+    for local, peer in candidates:
+        if peer.mgmt_only:
+            _add_cable_warning(warnings, local, W_MGMT_ONLY)
+        elif len(_cable_peers(peer)) > 1:
+            _add_cable_warning(warnings, local, W_BREAKOUT)
+        else:
+            pairs.append(CablePair(local, peer, peer.parent.pk in selected_pks))
+    return pairs
+
+
+def _link_names(mappings, pairs, warnings):
+    """Return the container name of each linked interface, from one map_interfaces call for each device.
+
+    The interfaces of a device are the local ends of its pairs and the far ends of the internal pairs on it.
+
+    Args:
+        mappings: The mapping of each device pk, in node order.
+        pairs: The CablePair list of _collect_cables.
+        warnings: The list that gets the map_interfaces warnings, in node order.
+    """
+    interfaces = {device_pk: set() for device_pk in mappings}
+    for pair in pairs:
+        interfaces[pair.local.parent.pk].add(pair.local)
+        if pair.internal:
+            interfaces[pair.far.parent.pk].add(pair.far)
+    container_names = {}
+    for device_pk, mapping in mappings.items():
+        names, mapper_warnings = map_interfaces(mapping, interfaces[device_pk])
+        container_names.update(names)
+        warnings.extend(mapper_warnings)
+    return container_names
+
+
+def _name_problem(interface, container_names):
+    """Return the warning text if the interface has no container name, or a name with a host variable marker."""
+    name = container_names.get(interface)
+    if name is None:
+        return W_NO_NAME
+    if _has_variable(name):
+        return W_NAME_VARIABLE
+    return None
+
+
+def _internal_links(pairs, node_names, container_names, warnings):
+    """Return a link for each pair between selected devices, and skip a pair with an end that has no valid name."""
+    links = []
+    for pair in pairs:
+        if not pair.internal:
+            continue
+        ends = (pair.local, pair.far)
+        problems = [(end, text) for end in ends if (text := _name_problem(end, container_names))]
+        if problems:
+            _add_cable_warning(warnings, *problems[0])
+            continue
+        links.append({"endpoints": sorted(f"{node_names[end.parent.pk]}:{container_names[end]}" for end in ends)})
+    return links
+
+
+def _device_nodes(devices, warnings):
+    """Return the node of each device and the mapping of each device pk, in the order of the devices."""
+    warned_pks = set()
+    device_nodes = []
+    mappings = {}
+    for device in devices:
+        mapping = resolve_mapping(device)
+        node = _mapping_node(mapping)
+        _apply_overrides(node, mapping, warnings, warned_pks)
+        device_nodes.append(node)
+        mappings[device.pk] = mapping
+    return device_nodes, mappings
+
+
 def build_topology(lab, devices):
     """Return the containerlab topology of the lab, the build warnings, and the device of each node name.
 
@@ -223,14 +408,11 @@ def build_topology(lab, devices):
         raise ValidationError(EMPTY_DEVICES_MESSAGE.format(lab=lab))
     ordered = sorted(unique_devices.values(), key=_node_order)
     warnings = []
-    warned_pks = set()
-    device_nodes = []
-    for device in ordered:
-        mapping = resolve_mapping(device)
-        node = _mapping_node(mapping)
-        _apply_overrides(node, mapping, warnings, warned_pks)
-        device_nodes.append(node)
+    device_nodes, mappings = _device_nodes(ordered, warnings)
+    pairs = _collect_cables(ordered, warnings)
+    container_names = _link_names(mappings, pairs, warnings)
     names = _allocate_names([_base_name(device.name, device.pk) for device in ordered])
+    links = _internal_links(pairs, {device.pk: name for name, device in zip(names, ordered)}, container_names, warnings)
     addresses = _assign_addresses(lab, names)
     nodes = {name: {**node, "mgmt-ipv4": addresses[name]} for name, node in zip(names, device_nodes)}
     node_devices = dict(zip(names, ordered))
@@ -239,6 +421,8 @@ def build_topology(lab, devices):
         "mgmt": {"network": f"{MGMT_NETWORK_PREFIX}{lab.name}", "ipv4-subnet": lab.mgmt_subnet},
         "topology": {"nodes": nodes},
     }
+    if links:
+        topology["topology"]["links"] = sorted(links, key=lambda link: link["endpoints"])
     return topology, warnings, node_devices
 
 
