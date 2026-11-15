@@ -102,14 +102,15 @@ def _check_dynamic_group(group):
         raise ValidationError({"dynamic_group": [NOT_DEVICE_GROUP_MESSAGE]})
     messages = []
     for member_group in [group, *group.get_descendants()]:
-        if member_group.group_type == "dynamic-filter" and member_group.filter:
+        if member_group.group_type == "dynamic-filter":
+            if not member_group.filter:
+                messages.append(f"{member_group}: {MATCH_ALL_GROUP_MESSAGE}")
+                continue
             try:
                 validate_device_filter(member_group.filter)
             except ValidationError as error:
                 messages.extend(f"{member_group}: {message}" for message in error.message_dict["device_filter"])
-        elif member_group.group_type == "dynamic-filter" or (
-            member_group.group_type == "dynamic-set" and not member_group.children.exists()
-        ):
+        elif member_group.group_type == "dynamic-set" and not member_group.children.exists():
             messages.append(f"{member_group}: {MATCH_ALL_GROUP_MESSAGE}")
     if messages:
         raise ValidationError({"dynamic_group": messages})
@@ -148,10 +149,11 @@ def select_devices(lab, user=None):
         _check_dynamic_group(lab.dynamic_group)
         sources |= Q(pk__in=_refreshed_members(lab.dynamic_group).values("pk"))
     selected = Device.objects.filter(sources)
-    devices = selected if user is None else Device.objects.restrict(user, "view").filter(sources)
-    if not devices.exists():
+    devices = selected if user is None else selected.restrict(user, "view")
+    visible_count = devices.count()
+    if not visible_count:
         raise ValidationError(EMPTY_SELECTION_MESSAGE.format(lab=lab))
-    hidden_count = selected.count() - devices.count() if user is not None else 0
+    hidden_count = selected.count() - visible_count if user is not None else 0
     if hidden_count:
         raise ValidationError(HIDDEN_DEVICES_MESSAGE.format(count=hidden_count, lab=lab))
     return devices

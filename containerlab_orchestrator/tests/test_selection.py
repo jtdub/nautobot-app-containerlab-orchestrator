@@ -44,6 +44,13 @@ class SelectionTestCase(TestCase):
         lab.devices.set(devices)
         return lab
 
+    def make_unchecked_lab(self, **fields):
+        """Return a saved lab whose fields are written with no clean(), so that they can be bad."""
+        lab = self.make_lab()
+        Lab.objects.filter(pk=lab.pk).update(**fields)
+        lab.refresh_from_db()
+        return lab
+
     def assert_selects(self, lab, names, user=None):
         """Assert that select_devices gives exactly the devices with these names."""
         self.assertEqual(set(select_devices(lab, user=user).values_list("name", flat=True)), names)
@@ -151,9 +158,7 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
                 with self.assertRaises(ValidationError) as context:
                     validate_device_filter(device_filter)
                 self.assertEqual(context.exception.message_dict, {"device_filter": messages})
-                lab = self.make_lab()
-                Lab.objects.filter(pk=lab.pk).update(device_filter=device_filter)
-                lab.refresh_from_db()
+                lab = self.make_unchecked_lab(device_filter=device_filter)
                 self.assert_select_errors(lab, {"device_filter": messages})
 
     def test_unknown_key_fails_without_strict_filtering(self):
@@ -163,9 +168,7 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
         self.assertEqual(context.exception.message_dict, {"device_filter": ["bogus: Unknown filter field."]})
 
     def test_saved_filter_that_is_not_object_raises_error(self):
-        lab = self.make_lab(devices=[self.lab_devices["spine1"]])
-        Lab.objects.filter(pk=lab.pk).update(device_filter=["leaf"])
-        lab.refresh_from_db()
+        lab = self.make_unchecked_lab(device_filter=["leaf"])
         self.assert_select_errors(lab, {"device_filter": ['Enter a JSON object, for example {"key": "value"}.']})
 
     def test_empty_selection_raises_error(self):
@@ -189,9 +192,7 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
         )
         for group, messages in cases:
             with self.subTest(group=group.name):
-                lab = self.make_lab()
-                Lab.objects.filter(pk=lab.pk).update(dynamic_group=group)
-                lab.refresh_from_db()
+                lab = self.make_unchecked_lab(dynamic_group=group)
                 self.assert_select_errors(lab, {"dynamic_group": messages})
 
     def test_match_all_dynamic_group_raises_error(self):

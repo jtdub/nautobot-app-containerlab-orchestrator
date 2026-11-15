@@ -406,9 +406,7 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
 
     def _changed_device_filter_messages(self):
         """Return the errors of a device filter that is new or that differs from the saved value."""
-        if not self.device_filter:
-            return []
-        if self.present_in_database and self.device_filter == self._saved_device_filter():
+        if not self.device_filter or (self.present_in_database and self.device_filter == self._saved_device_filter()):
             return []
         try:
             validate_device_filter(self.device_filter)
