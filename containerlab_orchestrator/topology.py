@@ -274,6 +274,8 @@ def _cable_peers(termination):
 
 def _is_multi_connector(interface):
     """Return True if the cable of the interface has a cable type with more than one connector on a side."""
+    if _CABLE_RELATION == "cable":
+        return False
     cable_type = getattr(interface.cable, "cable_type", None)
     return cable_type is not None and cable_type.is_multi_connector
 
