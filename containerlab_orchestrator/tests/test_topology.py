@@ -2,17 +2,31 @@
 
 import json
 from pathlib import Path
+from unittest import mock, skipUnless
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from jsonschema import Draft7Validator
 from nautobot.apps.testing import TestCase
-from nautobot.dcim.models import Device, Location, LocationType
+from nautobot.circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from nautobot.dcim import models as dcim_models
+from nautobot.dcim.models import (
+    Cable,
+    Device,
+    FrontPort,
+    Interface,
+    Location,
+    LocationType,
+    Module,
+    ModuleBay,
+    ModuleType,
+    RearPort,
+)
 from nautobot.extras.models import Role, Status
 
 from containerlab_orchestrator import topology
-from containerlab_orchestrator.models import Lab, NodeMapping
+from containerlab_orchestrator.models import InterfaceMapping, Lab, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_interface_mappings,
     create_lab_devices,
@@ -21,7 +35,17 @@ from containerlab_orchestrator.tests.fixtures import (
 from containerlab_orchestrator.topology import (
     CLAB_NAME_PATTERN,
     EMPTY_DEVICES_MESSAGE,
+    KIND_VARIABLE_MESSAGE,
     SUBNET_ROOM_MESSAGE,
+    W_BREAKOUT,
+    W_MGMT_ONLY,
+    W_NAME_VARIABLE,
+    W_NO_FAR_DEVICE,
+    W_NO_FAR_END,
+    W_NO_NAME,
+    W_NOT_INTERFACE,
+    W_OVERRIDE,
+    W_VARIABLE,
     build_topology,
     to_yaml,
 )
@@ -70,6 +94,7 @@ class TopologyTestCase(TestCase):
         cls.role.content_types.add(device_content_type)
         cls.default_type = cls.leaf1.device_type
         cls.arista1 = cls.add_device("arista1", cls.arista_mapping.device_type)
+        cls.arista2 = cls.add_device("arista2", cls.arista_mapping.device_type)
         cls.nokia1 = cls.add_device("nokia1", cls.nokia_mapping.device_type)
 
     @classmethod
@@ -83,9 +108,54 @@ class TopologyTestCase(TestCase):
             role=cls.role,
         )
 
+    @classmethod
+    def add_interfaces(cls, device, *names, mgmt_only=False):
+        """Return a saved interface of the device for each name."""
+        status = Status.objects.get_for_model(Interface).get(name="Active")
+        return [
+            Interface.objects.create(device=device, name=name, type="1000base-t", status=status, mgmt_only=mgmt_only)
+            for name in names
+        ]
+
+    @staticmethod
+    def connect(termination_a, termination_b, status_name="Connected"):
+        """Return a saved cable between the two terminations, with the status name."""
+        cable = Cable(
+            termination_a=termination_a,
+            termination_b=termination_b,
+            status=Status.objects.get_for_model(Cable).get(name=status_name),
+        )
+        cable.validated_save()
+        return cable
+
+    @classmethod
+    def add_module_interface(cls, device, name, bay=True):
+        """Return a saved interface on a new module, which is in a bay of the device, or in no bay."""
+        module_type = ModuleType.objects.create(manufacturer=device.device_type.manufacturer, model=f"Module {name}")
+        if bay:
+            place = {"parent_module_bay": ModuleBay.objects.create(parent_device=device, name=f"bay {name}")}
+        else:
+            place = {"location": cls.site1}
+        module = Module.objects.create(module_type=module_type, status=cls.active, **place)
+        status = Status.objects.get_for_model(Interface).get(name="Active")
+        return Interface.objects.create(module=module, name=name, type="1000base-t", status=status)
+
+    def cable_warning(self, interface, text):
+        """Return the warning that the builder gives for a cable of the interface."""
+        return f"Device {interface.parent}, interface {interface.name}: {text}"
+
+    def links(self, devices):
+        """Return the links and the warnings of a topology of the devices."""
+        built, warnings, _ = build_topology(new_lab(), devices)
+        return [link["endpoints"] for link in built["topology"].get("links", [])], warnings
+
     def use_full_kind_names(self):
         """Change the Arista mapping kind from the alias ceos to arista_ceos, which the schema accepts."""
         NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind="arista_ceos")
+
+    def set_arista_overrides(self, overrides):
+        """Set the overrides of the Arista mapping row."""
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(overrides=overrides)
 
     def node_names(self, devices, lab=None):
         """Return the node names of a topology of the devices, in node order."""
@@ -205,6 +275,292 @@ class BuildTopologyNodesTestCase(TopologyTestCase):
         self.assertEqual(node_devices, {"arista1": self.arista1, "spine1": self.spine1})
 
 
+class BuildTopologyOverridesTestCase(TopologyTestCase):
+    """Test the overrides allow-list of build_topology."""
+
+    def test_overrides_merge_deeply_for_allowed_keys(self):
+        self.set_arista_overrides({"env": {"B": "2"}, "labels": {"x": "y"}, "image": "ceos:4.33"})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(
+            list(built["topology"]["nodes"]["arista1"].items()),
+            [
+                ("kind", "ceos"),
+                ("image", "ceos:4.33"),
+                ("cpu", 2.0),
+                ("memory", "2Gb"),
+                ("env", {"CLAB_MGMT_VRF": "MGMT", "B": "2"}),
+                ("labels", {"x": "y"}),
+                ("mgmt-ipv4", "172.20.21.2"),
+            ],
+        )
+        self.assertEqual(warnings, [])
+
+    def test_overrides_drop_other_keys_with_one_warning_for_each_mapping(self):
+        self.set_arista_overrides(
+            {"exec": ["touch /tmp/x"], "binds": ["/etc:/host-etc"], "kind": "x", "mgmt-ipv4": "1.1.1.1"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        nodes = built["topology"]["nodes"]
+        for name, address in (("arista1", "172.20.21.2"), ("arista2", "172.20.21.3")):
+            self.assertEqual(nodes[name]["kind"], "ceos")
+            self.assertEqual(nodes[name]["mgmt-ipv4"], address)
+            self.assertNotIn("exec", nodes[name])
+            self.assertNotIn("binds", nodes[name])
+        self.assertEqual(
+            warnings, [W_OVERRIDE.format(mapping=self.arista_mapping, keys="binds, exec, kind, mgmt-ipv4")]
+        )
+
+    def test_default_mapping_adds_no_override_warning(self):
+        built, warnings, _ = build_topology(new_lab(), [self.leaf1, self.leaf2])
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            built["topology"]["nodes"]["leaf1"],
+            {"kind": "linux", "image": "alpine:latest", "mgmt-ipv4": "172.20.21.2"},
+        )
+
+    def test_build_leaves_the_mapping_unchanged(self):
+        overrides = {"env": {"A": "$HOME", "B": "2"}, "labels": {"x": "y"}}
+        self.set_arista_overrides(overrides)
+        built, _, _ = build_topology(new_lab(), [self.arista1])
+        stored = NodeMapping.objects.get(pk=self.arista_mapping.pk)
+        self.assertEqual(stored.overrides, overrides)
+        self.assertEqual(stored.env, {"CLAB_MGMT_VRF": "MGMT"})
+        built["topology"]["nodes"]["arista1"]["env"]["B"] = "changed"
+        built["topology"]["nodes"]["arista1"]["labels"]["x"] = "changed"
+        second, _, _ = build_topology(new_lab(), [self.arista1])
+        node = second["topology"]["nodes"]["arista1"]
+        self.assertEqual((node["env"], node["labels"]), ({"CLAB_MGMT_VRF": "MGMT", "B": "2"}, {"x": "y"}))
+
+
+class BuildTopologyVariablesTestCase(TopologyTestCase):
+    """Test that build_topology drops each value that containerlab fills from the host environment."""
+
+    def variable_warning(self, keys):
+        """Return the W_VARIABLE warning of the Arista mapping for the keys."""
+        return W_VARIABLE.format(mapping=self.arista_mapping, keys=keys)
+
+    def test_override_with_a_variable_is_dropped(self):
+        self.set_arista_overrides(
+            {"image": "registry.example/x:${X}", "labels": {"$k": "v"}, "env": {"A": "$HOME"}, "cpu-set": "0-1"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertEqual(node["image"], "ceos:4.32.0F")
+        self.assertEqual(node["env"], {"CLAB_MGMT_VRF": "MGMT"})
+        self.assertEqual(node["cpu-set"], "0-1")
+        self.assertNotIn("labels", node)
+        self.assertEqual(warnings, [self.variable_warning("env.A, image, labels")])
+
+    def test_mapping_value_with_a_variable_is_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(
+            image="ceos:${TAG}", env={"A": "${SECRET}", "B": "2"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("image", node)
+        self.assertEqual(node["env"], {"B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.A, image")])
+
+    def test_nested_variable_drops_the_key(self):
+        self.set_arista_overrides({"labels": {"team": "lab", "rack": {"row": ["${ROW}"]}}, "env": {"B": {"C": "$X"}}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("labels", node)
+        self.assertEqual(node["env"], {"CLAB_MGMT_VRF": "MGMT"})
+        self.assertEqual(warnings, [self.variable_warning("env.B, labels")])
+
+    def test_import_envs_drops_the_env_entry(self):
+        self.set_arista_overrides({"env": {"__IMPORT_ENVS": True, "B": "2"}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(built["topology"]["nodes"]["arista1"]["env"], {"CLAB_MGMT_VRF": "MGMT", "B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.__IMPORT_ENVS")])
+
+    def test_import_envs_alone_drops_the_env_key(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(env={"__IMPORT_ENVS": "true"})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertNotIn("env", built["topology"]["nodes"]["arista1"])
+        self.assertEqual(warnings, [self.variable_warning("env.__IMPORT_ENVS")])
+
+    def test_mapping_type_and_memory_with_a_variable_are_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(node_type="${TYPE}", memory="${MEMORY}")
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("type", node)
+        self.assertNotIn("memory", node)
+        self.assertEqual(warnings, [self.variable_warning("memory, type")])
+
+    def test_override_with_a_template_action_is_dropped(self):
+        self.set_arista_overrides({"labels": {"x": '{{ "\'\n      binds: ["/:/host"]\n      y: \'" }}'}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertNotIn("labels", built["topology"]["nodes"]["arista1"])
+        self.assertEqual(warnings, [self.variable_warning("labels")])
+
+    def test_mapping_value_with_a_template_action_is_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(
+            image="ceos:{{.Tag}}", env={"A": r'{{"\x24{API_SECRET}"}}', "B": "2"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("image", node)
+        self.assertEqual(node["env"], {"B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.A, image")])
+
+    def test_kind_with_a_variable_raises(self):
+        for kind in ("ceos${X}", "ceos{{.X}}"):
+            with self.subTest(kind=kind):
+                NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind=kind)
+                with self.assertRaises(ValidationError) as context:
+                    build_topology(new_lab(), [self.arista1])
+                self.assertEqual(
+                    context.exception.messages, [KIND_VARIABLE_MESSAGE.format(mapping=self.arista_mapping)]
+                )
+
+
+class BuildTopologyLinksTestCase(TopologyTestCase):
+    """Test the links between the selected devices and the cables that build_topology skips."""
+
+    def test_cable_between_selected_devices_gives_link(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        (far,) = self.add_interfaces(self.arista2, "GigabitEthernet0/2")
+        self.connect(local, far)
+        self.assertEqual(self.links([self.arista2, self.arista1]), ([["arista1:eth1", "arista2:eth2"]], []))
+
+    def test_circuit_cable_is_skipped_with_warning(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        circuit = Circuit.objects.create(
+            cid="circuit-1",
+            provider=Provider.objects.create(name="Provider 1"),
+            circuit_type=CircuitType.objects.create(name="Transit"),
+            status=Status.objects.get_for_model(Circuit).first(),
+        )
+        self.connect(local, CircuitTermination.objects.create(circuit=circuit, term_side="A", location=self.site1))
+        self.assertEqual(
+            self.links([self.arista1]),
+            ([], [self.cable_warning(local, W_NOT_INTERFACE.format(kind="circuit termination"))]),
+        )
+
+    def test_front_port_cable_is_skipped_with_warning(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        rear_port = RearPort.objects.create(device=self.arista2, name="rear1", type="8p8c", positions=1)
+        front_port = FrontPort.objects.create(
+            device=self.arista2, name="front1", type="8p8c", rear_port=rear_port, rear_port_position=1
+        )
+        self.connect(local, front_port)
+        self.assertEqual(
+            self.links([self.arista1, self.arista2]),
+            ([], [self.cable_warning(local, W_NOT_INTERFACE.format(kind="front port"))]),
+        )
+
+    def test_mgmt_only_cable_is_skipped_with_one_warning(self):
+        local_mgmt, local_data = self.add_interfaces(self.arista1, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        local_mgmt.mgmt_only = True
+        local_mgmt.save()
+        (far_data,) = self.add_interfaces(self.arista2, "GigabitEthernet0/1")
+        (far_mgmt,) = self.add_interfaces(self.arista2, "GigabitEthernet0/2", mgmt_only=True)
+        self.connect(local_mgmt, far_data)
+        self.connect(local_data, far_mgmt)
+        self.assertEqual(
+            self.links([self.arista1, self.arista2]),
+            ([], [self.cable_warning(local_mgmt, W_MGMT_ONLY), self.cable_warning(local_data, W_MGMT_ONLY)]),
+        )
+
+    def test_planned_and_decommissioning_cables_are_linked(self):
+        local = self.add_interfaces(self.arista1, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        far = self.add_interfaces(self.arista2, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        self.connect(local[0], far[0], status_name="Planned")
+        self.connect(local[1], far[1], status_name="Decommissioning")
+        self.assertEqual(
+            self.links([self.arista1, self.arista2]),
+            ([["arista1:eth1", "arista2:eth1"], ["arista1:eth2", "arista2:eth2"]], []),
+        )
+
+    def test_cable_on_one_device_keeps_link(self):
+        self.connect(*self.add_interfaces(self.arista1, "GigabitEthernet0/2", "GigabitEthernet0/1"))
+        self.assertEqual(self.links([self.arista1]), ([["arista1:eth1", "arista1:eth2"]], []))
+
+    def test_module_interface_cable_gives_link(self):
+        module_interface = self.add_module_interface(self.arista1, "Ethernet1/1")
+        self.connect(module_interface, self.add_interfaces(self.arista2, "GigabitEthernet0/1")[0])
+        links, warnings = self.links([self.arista1, self.arista2])
+        self.assertEqual(links, [["arista1:eth3", "arista2:eth1"]])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("interface Ethernet1/1: the interface table has no row", warnings[0])
+
+    def test_interface_without_container_name_skips_link(self):
+        (device_interface,) = self.add_interfaces(self.arista1, "Ethernet1/1")
+        module_interface = self.add_module_interface(self.arista1, "Ethernet1/1")
+        far = self.add_interfaces(self.arista2, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        self.connect(device_interface, far[0])
+        self.connect(module_interface, far[1])
+        links, warnings = self.links([self.arista1, self.arista2])
+        self.assertEqual(links, [["arista1:eth3", "arista2:eth1"]])
+        self.assertIn("This interface gets no container name.", warnings[-2])
+        self.assertEqual(warnings[-1], self.cable_warning(module_interface, W_NO_NAME))
+
+    def test_container_name_with_a_variable_skips_link(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        (far,) = self.add_interfaces(self.arista2, "GigabitEthernet0/2")
+        self.connect(local, far)
+        rows = InterfaceMapping.objects.filter(node_mapping=self.arista_mapping, physical_name="GigabitEthernet0/2")
+        for container_name in ("eth${X}", "eth{{.X}}"):
+            with self.subTest(container_name=container_name):
+                rows.update(container_name=container_name)
+                self.assertEqual(
+                    self.links([self.arista1, self.arista2]), ([], [self.cable_warning(far, W_NAME_VARIABLE)])
+                )
+
+    def test_more_than_one_far_end_is_skipped(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        (far,) = self.add_interfaces(self.arista2, "GigabitEthernet0/1")
+        self.connect(local, far)
+        cases = (
+            ({local.pk: [far, far], far.pk: [local]}, W_BREAKOUT),
+            ({local.pk: [far], far.pk: [local, local]}, W_BREAKOUT),
+            ({local.pk: [], far.pk: [local]}, W_NO_FAR_END),
+        )
+        for peers, text in cases:
+            with self.subTest(text=text, peers=len(peers[local.pk])):
+                with mock.patch.object(topology, "_cable_peers", side_effect=lambda end, peers=peers: peers[end.pk]):
+                    self.assertEqual(self.links([self.arista1, self.arista2]), ([], [self.cable_warning(local, text)]))
+
+    def test_multi_connector_cable_is_skipped(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        self.connect(local, self.add_interfaces(self.arista2, "GigabitEthernet0/1")[0])
+        with mock.patch.object(topology, "_is_multi_connector", return_value=True):
+            self.assertEqual(self.links([self.arista1, self.arista2]), ([], [self.cable_warning(local, W_BREAKOUT)]))
+
+    @skipUnless(hasattr(Interface, "get_cable_peers"), "Multi-connector cables exist on Nautobot 3.2 and later.")
+    def test_two_by_two_cable_is_skipped(self):
+        # pylint: disable=no-member
+        mesh_type = dcim_models.CableType(
+            name="Topology 2x2",
+            a_connectors=2,
+            b_connectors=2,
+            total_lanes=4,
+            mapping=[
+                {"a_connector": 1, "a_position": 1, "b_connector": 1, "b_position": 1},
+                {"a_connector": 1, "a_position": 2, "b_connector": 2, "b_position": 1},
+                {"a_connector": 2, "a_position": 1, "b_connector": 1, "b_position": 2},
+                {"a_connector": 2, "a_position": 2, "b_connector": 2, "b_position": 2},
+            ],
+        )
+        mesh_type.validated_save()
+        a1, a2 = self.add_interfaces(self.arista1, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        b1, b2 = self.add_interfaces(self.arista2, "GigabitEthernet0/1", "GigabitEthernet0/2")
+        cable = Cable(
+            termination_a=a1, termination_b=b1, cable_type=mesh_type, status=Status.objects.get_for_model(Cable).first()
+        )
+        cable.save()
+        cable.add_termination(a2, "A", connector=2)
+        cable.add_termination(b2, "B", connector=2)
+        self.assertEqual(self.links([self.arista1, self.arista2]), ([], [self.cable_warning(a1, W_BREAKOUT)]))
+
+    def test_far_interface_with_no_device_is_skipped(self):
+        (local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/1")
+        self.connect(local, self.add_module_interface(self.arista2, "Ethernet9/1", bay=False))
+        self.assertEqual(self.links([self.arista1]), ([], [self.cable_warning(local, W_NO_FAR_DEVICE)]))
+
+
 class TopologyYamlTestCase(TopologyTestCase):
     """Test the YAML text of a topology and the containerlab schema check."""
 
@@ -231,3 +587,31 @@ class TopologyYamlTestCase(TopologyTestCase):
         for devices in ([self.leaf1, self.leaf2, self.spine1], [self.arista1, self.nokia1]):
             built, _, _ = build_topology(new_lab(), devices)
             self.assertEqual([error.message for error in validator.iter_errors(built)], [])
+
+    def test_topology_with_overrides_passes_schema(self):
+        self.use_full_kind_names()
+        self.set_arista_overrides(
+            {
+                "env": {"B": "2"},
+                "labels": {"team": "lab", "rack": 4},
+                "cpu-set": "0-1",
+                "shm-size": "1gb",
+                "image-pull-policy": "IfNotPresent",
+                "startup-delay": 5,
+            }
+        )
+        built, _, _ = build_topology(new_lab(), [self.arista1, self.arista2, self.nokia1, self.leaf1])
+        self.assertEqual(built["topology"]["nodes"]["arista1"]["startup-delay"], 5)
+        self.assertEqual([error.message for error in load_clab_schema().iter_errors(built)], [])
+
+    def test_links_pass_schema_and_repeat(self):
+        self.use_full_kind_names()
+        self.connect(
+            self.add_interfaces(self.arista1, "GigabitEthernet0/1")[0],
+            self.add_interfaces(self.arista2, "GigabitEthernet0/2")[0],
+        )
+        built, _, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        second, _, _ = build_topology(new_lab(), [self.arista2, self.arista1])
+        self.assertEqual(built["topology"]["links"], [{"endpoints": ["arista1:eth1", "arista2:eth2"]}])
+        self.assertEqual(to_yaml(built), to_yaml(second))
+        self.assertEqual([error.message for error in load_clab_schema().iter_errors(built)], [])
