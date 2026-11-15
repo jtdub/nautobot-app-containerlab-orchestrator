@@ -11,6 +11,7 @@ app_name = "containerlab_orchestrator"
 router = NautobotUIViewSetRouter()
 router.register("containerlab-hosts", views.ContainerlabHostUIViewSet)
 router.register("node-mappings", views.NodeMappingUIViewSet)
+router.register("labs", views.LabUIViewSet)
 
 
 urlpatterns = [

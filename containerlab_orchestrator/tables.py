@@ -1,9 +1,9 @@
 """Tables for the containerlab_orchestrator app."""
 
 import django_tables2 as tables
-from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, TagColumn, ToggleColumn
+from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, StatusTableMixin, TagColumn, ToggleColumn
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
 
 
 class ContainerlabHostTable(BaseTable):
@@ -68,3 +68,35 @@ class InterfaceMappingTable(BaseTable):
 
         model = InterfaceMapping
         fields = ("physical_name", "container_name")
+
+
+class LabTable(StatusTableMixin, BaseTable):
+    """Table of Lab records."""
+
+    pk = ToggleColumn()
+    name = tables.Column(linkify=True)
+    host = tables.Column(linkify=True)
+    owner = tables.Column()
+    config_source = tables.Column()
+    mgmt_subnet = tables.Column()
+    built_at = tables.DateTimeColumn()
+    tags = TagColumn(url_name="plugins:containerlab_orchestrator:lab_list")
+    actions = ButtonsColumn(Lab)
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for LabTable."""
+
+        model = Lab
+        fields = (
+            "pk",
+            "name",
+            "host",
+            "owner",
+            "status",
+            "config_source",
+            "mgmt_subnet",
+            "built_at",
+            "tags",
+            "actions",
+        )
+        default_columns = ("pk", "name", "host", "owner", "status", "mgmt_subnet", "built_at", "actions")

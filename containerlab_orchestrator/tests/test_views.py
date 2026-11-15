@@ -11,20 +11,25 @@ from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
 from nautobot.dcim.models import DeviceType, Manufacturer, Platform
-from nautobot.extras.models import ObjectChange
+from nautobot.extras.models import ObjectChange, Status
 
-from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
 from containerlab_orchestrator.tables import InterfaceMappingTable
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_http_secrets_group,
     create_interface_mappings,
+    create_lab_devices,
+    create_lab_nodes,
+    create_labs,
     create_node_mappings,
 )
 
 HOST_LIST_URL_NAME = "plugins:containerlab_orchestrator:containerlabhost_list"
 NODE_MAPPING_LIST_URL_NAME = "plugins:containerlab_orchestrator:nodemapping_list"
+LAB_LIST_URL_NAME = "plugins:containerlab_orchestrator:lab_list"
+DUPLICATE_LAB_NAME_MESSAGE = "A lab with this name already exists on this host."
 INTERFACE_ROWS_PREFIX = "interface_mappings"
 ARISTA_PHYSICAL_NAMES = ("GigabitEthernet0/1", "GigabitEthernet0/2", "GigabitEthernet0/10")
 NODE_MAPPING_EDIT_PERMISSIONS = (
@@ -662,3 +667,173 @@ class InterfaceMappingTableTestCase(TestCase):
                 table = InterfaceMappingTable(arista.interface_mappings.all(), order_by=order_by)
 
                 self.assertEqual([row.record.physical_name for row in table.rows], expected)
+
+
+def create_lab_view_data():
+    """Return the hosts, the lab devices, and the labs, with node rows on the labs."""
+    hosts = create_containerlab_hosts()
+    lab_devices = create_lab_devices()
+    labs = create_labs(hosts, lab_devices)
+    create_lab_nodes(labs, lab_devices)
+    return hosts, lab_devices, labs
+
+
+class LabViewTestCase(ViewTestCases.PrimaryObjectViewTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot UI view tests on Lab, and test the owner and the status on the forms."""
+
+    model = Lab
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.hosts, cls.lab_devices, cls.labs = create_lab_view_data()
+        cls.form_data = {
+            "name": "view-lab",
+            "host": cls.hosts[2].pk,
+            "mgmt_subnet": "192.168.60.0/24",
+            "config_source": NodeMappingConfigSourceChoices.NONE,
+            "device_filter": '{"role": ["leaf"]}',
+            "devices": [cls.lab_devices["leaf1"].pk],
+        }
+        cls.update_data = {**cls.form_data, "name": "view-lab-2", "mgmt_subnet": "192.168.61.0/24"}
+        cls.bulk_edit_data = {"config_source": NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP}
+
+    def setUp(self):
+        super().setUp()
+        self.lab_a, self.lab_b, self.lab_a_clab02 = self.labs
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_create_sets_owner_and_planned_status(self):
+        self.add_permissions("containerlab_orchestrator.add_lab")
+
+        add_page = self.client.get(self._get_url("add"))
+        response = self.client.post(self._get_url("add"), self.form_data)
+
+        self.assertNotContains(add_page, 'name="owner"')
+        self.assertNotContains(add_page, 'name="status"')
+        self.assertHttpStatus(response, 302)
+        lab = Lab.objects.get(name="view-lab")
+        self.assertEqual(lab.owner, self.user)
+        self.assertEqual(lab.status.name, LabStatusChoices.PLANNED)
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_edit_keeps_owner_and_status(self):
+        self.add_permissions("containerlab_orchestrator.change_lab")
+        data = {
+            "name": "lab-b-edit",
+            "host": self.lab_b.host_id,
+            "mgmt_subnet": self.lab_b.mgmt_subnet,
+            "config_source": self.lab_b.config_source,
+            "dynamic_group": self.lab_b.dynamic_group_id,
+            "device_filter": "{}",
+            "devices": [device.pk for device in self.lab_b.devices.all()],
+        }
+
+        response = self.client.post(self._get_url("edit", self.lab_b), data)
+
+        self.assertHttpStatus(response, 302)
+        self.lab_b.refresh_from_db()
+        self.assertEqual(self.lab_b.name, "lab-b-edit")
+        self.assertEqual(self.lab_b.owner.username, "bob")
+        self.assertEqual(self.lab_b.status.name, LabStatusChoices.BUILT)
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_duplicate_name_shows_form_error(self):
+        self.add_permissions("containerlab_orchestrator.add_lab")
+        data = {
+            "name": "LAB-A",
+            "host": self.hosts[0].pk,
+            "mgmt_subnet": "192.168.70.0/24",
+            "config_source": NodeMappingConfigSourceChoices.NONE,
+        }
+        lab_count = Lab.objects.count()
+
+        response = self.client.post(self._get_url("add"), data)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, DUPLICATE_LAB_NAME_MESSAGE)
+        self.assertEqual(Lab.objects.count(), lab_count)
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_detail_page_shows_lab_fields(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+
+        response = self.client.get(self.lab_b.get_absolute_url())
+
+        self.assertHttpStatus(response, 200)
+        for text in ("lab-b", "bob", LabStatusChoices.BUILT, "clab01", "172.20.22.0/28", "Jinja2 template"):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_list_filtered_by_status_and_owner(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+        cases = (({"status": LabStatusChoices.BUILT}, self.lab_b), ({"owner": "carol"}, self.lab_a_clab02))
+        for query, expected_lab in cases:
+            with self.subTest(query=query):
+                response = self.client.get(self._get_url("list"), query, headers={"HX-Request": "true"})
+
+                self.assertHttpStatus(response, 200)
+                for lab in self.labs:
+                    if lab == expected_lab:
+                        self.assertContains(response, lab.get_absolute_url())
+                    else:
+                        self.assertNotContains(response, lab.get_absolute_url())
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_list_has_no_import_button(self):
+        self.add_permissions("containerlab_orchestrator.view_lab", "containerlab_orchestrator.add_lab")
+
+        response = self.client.get(self._get_url("list"))
+
+        self.assertContains(response, self._get_url("add"))
+        self.assertNotContains(response, "ImportObjects")
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_create_without_planned_status_shows_banner(self):
+        self.add_permissions("containerlab_orchestrator.add_lab")
+        Status.objects.get(name=LabStatusChoices.PLANNED).content_types.remove(ContentType.objects.get_for_model(Lab))
+
+        response = self.client.post(self._get_url("add"), self.form_data)
+
+        self.assertHttpStatus(response, 200)
+        self.assertBodyContains(response, "failed validation")
+        self.assertBodyContains(response, "The Planned status is not available for labs.")
+        self.assertFalse(Lab.objects.filter(name="view-lab").exists())
+
+
+class LabDiscoveryTestCase(TestCase):
+    """Test that a user finds the labs through the menu and the global search."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _, _, cls.labs = create_lab_view_data()
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_navigation_menu_has_labs_item(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+
+        response = self.client.get(reverse("home"))
+
+        self.assertContains(response, "Labs")
+        self.assertContains(response, f'href="{reverse(LAB_LIST_URL_NAME)}"')
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_navigation_menu_hides_labs_item_without_permission(self):
+        response = self.client.get(reverse("home"))
+
+        self.assertNotContains(response, f'href="{reverse(LAB_LIST_URL_NAME)}"')
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_global_search_returns_lab(self):
+        self.add_permissions("containerlab_orchestrator.view_lab")
+        lab_a, lab_b, lab_a_clab02 = self.labs
+
+        response = self.client.get(
+            reverse("search"),
+            {"q": "lab-b", "model": "containerlab_orchestrator.lab"},
+            HTTP_HX_REQUEST="true",
+        )
+
+        self.assertContains(response, lab_b.get_absolute_url())
+        self.assertNotContains(response, lab_a.get_absolute_url())
+        self.assertNotContains(response, lab_a_clab02.get_absolute_url())
