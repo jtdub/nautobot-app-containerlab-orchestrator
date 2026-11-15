@@ -114,9 +114,17 @@ class LabTable(StatusTableMixin, BaseTable):
 class LabDeviceTable(StatusTableMixin, RoleTableMixin, BaseTable):  # pylint: disable=nb-sub-class-name
     """Table of the manual devices of a lab, with no edit or delete buttons."""
 
-    name = tables.Column(linkify=True)
+    name = tables.TemplateColumn(
+        order_by=("_name",),
+        template_code=(
+            '<a href="{{ record.get_absolute_url }}">'
+            "{{ record.name|default:'<span class=\"badge bg-info\">Unnamed device</span>' }}</a>"
+        ),
+    )
     location = tables.Column(linkify=True)
-    device_type = tables.Column(linkify=True)
+    device_type = tables.TemplateColumn(
+        template_code='<a href="{{ record.device_type.get_absolute_url }}">{{ record.device_type.display }}</a>'
+    )
 
     class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
         """Meta attributes for LabDeviceTable."""

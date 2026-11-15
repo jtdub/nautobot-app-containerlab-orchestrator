@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
-from nautobot.dcim.models import DeviceType, Manufacturer, Platform
+from nautobot.dcim.models import Device, DeviceType, Manufacturer, Platform
 from nautobot.extras.models import ObjectChange, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
@@ -876,6 +876,7 @@ class LabDetailPageTestCase(TestCase):
             "leaf1",
             "stub-wan1",
             "172.20.21.4",
+            ">Lab vendor Lab switch</a>",
             "<strong>SELECTION</strong>",
             "<strong>DEVICE FILTER</strong>",
             "<strong>Devices</strong>",
@@ -910,15 +911,43 @@ class LabDetailPageTestCase(TestCase):
         self.assertBodyContains(response, '<i class="mdi mdi-check-bold" title="Yes"></i>', count=1)
 
     def test_panels_show_only_rows_the_user_can_view(self):
-        self.remove_permissions(
-            "containerlab_orchestrator.view_labnode", "dcim.view_device", "extras.view_dynamicgroup"
-        )
+        self.remove_permissions("containerlab_orchestrator.view_labnode", "dcim.view_device")
 
         response = self.get_lab_a_page()
 
+        self.assertBodyContains(response, "<strong>Devices</strong>")
         self.assertBodyContains(response, "<strong>Nodes</strong>")
         self.assertNotContains(response, "stub-wan1")
         self.assertNotContains(response, f'href="{self.lab_devices["spine1"].get_absolute_url()}"')
+
+    def get_devices_card(self, query=None):
+        """Return the HTML of the Devices card of the lab-a (clab01) page."""
+        body = self.get_lab_a_page(query).content.decode()
+        devices_card_start = body.index("<strong>Devices</strong>")
+        return body[devices_card_start : body.find("card-header", devices_card_start)]
+
+    def test_devices_panel_links_unnamed_device(self):
+        leaf1 = self.lab_devices["leaf1"]
+        unnamed = Device.objects.create(
+            name=None, device_type=leaf1.device_type, location=leaf1.location, status=leaf1.status, role=leaf1.role
+        )
+        self.lab_a.devices.set([unnamed])
+
+        devices_card = self.get_devices_card()
+
+        self.assertIn(f'href="{unnamed.get_absolute_url()}"', devices_card)
+        self.assertIn("Unnamed device", devices_card)
+
+    def test_devices_panel_sorts_names_in_natural_order(self):
+        leaf1 = self.lab_devices["leaf1"]
+        leaf10 = Device.objects.create(
+            name="leaf10", device_type=leaf1.device_type, location=leaf1.location, status=leaf1.status, role=leaf1.role
+        )
+        self.lab_a.devices.set([self.lab_devices["leaf2"], leaf10])
+
+        devices_card = self.get_devices_card({"sort": "name"})
+
+        self.assertLess(devices_card.index("leaf2"), devices_card.index("leaf10"))
 
     @override_settings(PAGINATE_COUNT=2)
     def test_panels_show_all_rows_when_rows_exceed_page_size(self):
