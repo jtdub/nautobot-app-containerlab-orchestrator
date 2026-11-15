@@ -26,6 +26,7 @@ from nautobot.extras.models import DynamicGroup, SecretsGroup, SecretsGroupAssoc
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
+from containerlab_orchestrator.selection import NOT_DEVICE_GROUP_MESSAGE, validate_device_filter
 from containerlab_orchestrator.validators import (
     subnet_node_room,
     validate_clab_api_url,
@@ -385,6 +386,10 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
             validate_json_object(self.device_filter)
         except ValidationError as error:
             errors["device_filter"] = error.messages
+        else:
+            filter_messages = self._changed_device_filter_messages()
+            if filter_messages:
+                errors["device_filter"] = filter_messages
         if self.dynamic_group_id is not None:
             group_content_type = (
                 DynamicGroup.objects.filter(pk=self.dynamic_group_id)
@@ -392,12 +397,26 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
                 .first()
             )
             if group_content_type is not None and group_content_type != ("dcim", "device"):
-                errors["dynamic_group"] = ["Select a Dynamic Group of devices."]
+                errors["dynamic_group"] = [NOT_DEVICE_GROUP_MESSAGE]
         subnet_message = self._subnet_room_message()
         if subnet_message:
             errors["mgmt_subnet"] = [subnet_message]
         if errors:
             raise ValidationError(errors)
+
+    def _changed_device_filter_messages(self):
+        """Return the errors of a device filter that is new or that differs from the saved value."""
+        if not self.device_filter or (self.present_in_database and self.device_filter == self._saved_device_filter()):
+            return []
+        try:
+            validate_device_filter(self.device_filter)
+        except ValidationError as error:
+            return error.message_dict["device_filter"]
+        return []
+
+    def _saved_device_filter(self):
+        """Return the device filter of the saved row of this lab."""
+        return Lab.objects.filter(pk=self.pk).values_list("device_filter", flat=True).first()
 
     def _subnet_room_message(self):
         """Return an error when the saved node rows do not fit in a valid subnet, else an empty string."""

@@ -331,6 +331,8 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
             ("mgmt_subnet", "172.20.21.1/24", CIDR_MESSAGE),
             ("mgmt_subnet", "10.0.0.0/31", SIZE_MESSAGE),
             ("device_filter", ["leaf"], 'Enter a JSON object, for example {"key": "value"}.'),
+            ("device_filter", {"bogus": ["1"]}, "bogus: Unknown filter field."),
+            ("device_filter", {"name": 5}, "name: Use a value or a list of values."),
             ("dynamic_group", location_group.pk, "Select a Dynamic Group of devices."),
         ):
             with self.subTest(field=field, value=value):
