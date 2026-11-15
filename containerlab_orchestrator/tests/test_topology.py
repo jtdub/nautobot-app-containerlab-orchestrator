@@ -659,8 +659,6 @@ class BuildTopologyStubsTestCase(TopologyTestCase):
                 ["arista2:eth1", "stub-wan2:eth1"],
             ],
         )
-        for _, stub_end in links:
-            self.assertRegex(stub_end, r"^stub-wan[12]:eth[1-9][0-9]*$")
         self.assertEqual(
             node_devices, {"arista1": self.arista1, "arista2": self.arista2, "stub-wan1": None, "stub-wan2": None}
         )

@@ -322,9 +322,9 @@ def _skip_text(local, peers):
 
 
 def _visible_device_pks(device_pks, user):
-    """Return the pks of the devices that the user can view, or None if no user is given."""
-    if user is None:
-        return None
+    """Return the pks of the devices that the user can view. With no user, each device is visible."""
+    if user is None or not device_pks:
+        return set(device_pks)
     return set(Device.objects.restrict(user, "view").filter(pk__in=device_pks).values_list("pk", flat=True))
 
 
@@ -351,11 +351,11 @@ def _collect_cables(devices, user, warnings):
                 _add_cable_warning(warnings, local, text)
             else:
                 candidates.append((local, peers[0]))
-    visible_pks = _visible_device_pks({peer.parent.pk for _, peer in candidates} - selected_pks, user)
+    viewable_pks = selected_pks | _visible_device_pks({peer.parent.pk for _, peer in candidates} - selected_pks, user)
     pairs = []
     hidden_locals = []
     for local, peer in candidates:
-        if visible_pks is not None and peer.parent.pk not in selected_pks and peer.parent.pk not in visible_pks:
+        if peer.parent.pk not in viewable_pks:
             _add_cable_warning(warnings, local, W_HIDDEN)
             hidden_locals.append(local)
         elif peer.mgmt_only:
@@ -404,6 +404,11 @@ def _name_problem(interface, container_names):
     return None
 
 
+def _link(end_a, end_b):
+    """Return a containerlab link between two endpoints, in sorted order."""
+    return {"endpoints": sorted([end_a, end_b])}
+
+
 def _internal_links(pairs, node_names, container_names, warnings):
     """Return a link for each pair between selected devices, and skip a pair with an end that has no valid name."""
     links = []
@@ -415,7 +420,7 @@ def _internal_links(pairs, node_names, container_names, warnings):
         if problems:
             _add_cable_warning(warnings, *problems[0])
             continue
-        links.append({"endpoints": sorted(f"{node_names[end.parent.pk]}:{container_names[end]}" for end in ends)})
+        links.append(_link(*(f"{node_names[end.parent.pk]}:{container_names[end]}" for end in ends)))
     return links
 
 
@@ -469,11 +474,7 @@ def _stub_nodes(stubs, node_names, container_names):
     image = _stub_image()
     nodes = {node_names[far_device.pk]: {"kind": STUB_KIND, "image": image} for far_device in stubs}
     links = [
-        {
-            "endpoints": sorted(
-                [f"{node_names[local.parent.pk]}:{container_names[local]}", f"{node_names[far_device.pk]}:{stub_end}"]
-            )
-        }
+        _link(f"{node_names[local.parent.pk]}:{container_names[local]}", f"{node_names[far_device.pk]}:{stub_end}")
         for far_device, ends in stubs.items()
         for stub_end, local in ends
     ]
@@ -489,7 +490,7 @@ def _node_names(devices, far_devices):
     bases += [_base_name(device.name, device.pk, STUB_PREFIX) for device in far_devices]
     names = _allocate_names(bases)
     node_names = {owner.pk: name for owner, name in zip([*devices, *far_devices], names)}
-    return node_names, dict(zip(names, [*devices, *[None] * len(far_devices)]))
+    return node_names, {**dict(zip(names, devices)), **dict.fromkeys(names[len(devices) :])}
 
 
 def _device_nodes(devices, warnings):
