@@ -938,7 +938,9 @@ class LabDetailPageTestCase(TestCase):
         response = self.get_lab_a_page({"sort": "-node_name"})
 
         body = response.content.decode()
-        self.assertLess(body.index("stub-wan1"), body.index("leaf1"))
+        nodes_card_start = body.index("<strong>Nodes</strong>")
+        nodes_card = body[nodes_card_start : body.find("card-header", nodes_card_start)]
+        self.assertLess(nodes_card.index("stub-wan1"), nodes_card.index("leaf1"))
 
     def test_detail_page_query_count_does_not_grow_with_rows(self):
         self.lab_a.devices.set([self.lab_devices[name] for name in ("leaf1", "leaf2", "spine1")])

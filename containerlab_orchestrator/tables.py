@@ -1,7 +1,16 @@
 """Tables for the containerlab_orchestrator app."""
 
 import django_tables2 as tables
-from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, StatusTableMixin, TagColumn, ToggleColumn
+from nautobot.apps.tables import (
+    BaseTable,
+    BooleanColumn,
+    ButtonsColumn,
+    RoleTableMixin,
+    StatusTableMixin,
+    TagColumn,
+    ToggleColumn,
+)
+from nautobot.dcim.models import Device
 
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
@@ -100,6 +109,21 @@ class LabTable(StatusTableMixin, BaseTable):
             "actions",
         )
         default_columns = ("pk", "name", "host", "owner", "status", "mgmt_subnet", "built_at", "actions")
+
+
+class LabDeviceTable(StatusTableMixin, RoleTableMixin, BaseTable):  # pylint: disable=nb-sub-class-name
+    """Table of the manual devices of a lab, with no edit or delete buttons."""
+
+    name = tables.Column(linkify=True)
+    location = tables.Column(linkify=True)
+    device_type = tables.Column(linkify=True)
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for LabDeviceTable."""
+
+        model = Device
+        fields = ("name", "status", "location", "role", "device_type")
+        default_columns = ("name", "status", "location", "role", "device_type")
 
 
 class LabNodeTable(BaseTable):

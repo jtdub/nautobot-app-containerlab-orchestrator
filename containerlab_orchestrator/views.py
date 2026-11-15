@@ -11,7 +11,6 @@ from nautobot.apps.ui import (
     SectionChoices,
 )
 from nautobot.apps.views import NautobotUIViewSet
-from nautobot.dcim.tables import DeviceTable
 
 from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
@@ -181,7 +180,7 @@ class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
             ObjectsTablePanel(
                 weight=300,
                 section=SectionChoices.RIGHT_HALF,
-                table_class=DeviceTable,
+                table_class=tables.LabDeviceTable,
                 table_attribute="devices",
                 related_field_name="labs",
                 table_title="Devices",
@@ -189,7 +188,6 @@ class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
                 enable_related_link=False,
                 max_display_count=1000,
                 show_table_config_button=False,
-                exclude_columns=["pk", "tenant", "rack", "primary_ip", "actions"],
                 select_related_fields=["status", "role", "device_type__manufacturer", "location"],
             ),
             ObjectsTablePanel(
