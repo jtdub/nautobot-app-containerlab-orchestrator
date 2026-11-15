@@ -22,6 +22,7 @@ from containerlab_orchestrator.topology import (
     CLAB_NAME_PATTERN,
     EMPTY_DEVICES_MESSAGE,
     SUBNET_ROOM_MESSAGE,
+    W_OVERRIDE,
     build_topology,
     to_yaml,
 )
@@ -70,6 +71,7 @@ class TopologyTestCase(TestCase):
         cls.role.content_types.add(device_content_type)
         cls.default_type = cls.leaf1.device_type
         cls.arista1 = cls.add_device("arista1", cls.arista_mapping.device_type)
+        cls.arista2 = cls.add_device("arista2", cls.arista_mapping.device_type)
         cls.nokia1 = cls.add_device("nokia1", cls.nokia_mapping.device_type)
 
     @classmethod
@@ -86,6 +88,10 @@ class TopologyTestCase(TestCase):
     def use_full_kind_names(self):
         """Change the Arista mapping kind from the alias ceos to arista_ceos, which the schema accepts."""
         NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind="arista_ceos")
+
+    def set_arista_overrides(self, overrides):
+        """Set the overrides of the Arista mapping row."""
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(overrides=overrides)
 
     def node_names(self, devices, lab=None):
         """Return the node names of a topology of the devices, in node order."""
@@ -205,6 +211,50 @@ class BuildTopologyNodesTestCase(TopologyTestCase):
         self.assertEqual(node_devices, {"arista1": self.arista1, "spine1": self.spine1})
 
 
+class BuildTopologyOverridesTestCase(TopologyTestCase):
+    """Test the overrides allow-list of build_topology."""
+
+    def test_overrides_merge_deeply_for_allowed_keys(self):
+        self.set_arista_overrides({"env": {"B": "2"}, "labels": {"x": "y"}, "image": "ceos:4.33"})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(
+            list(built["topology"]["nodes"]["arista1"].items()),
+            [
+                ("kind", "ceos"),
+                ("image", "ceos:4.33"),
+                ("cpu", 2.0),
+                ("memory", "2Gb"),
+                ("env", {"CLAB_MGMT_VRF": "MGMT", "B": "2"}),
+                ("labels", {"x": "y"}),
+                ("mgmt-ipv4", "172.20.21.2"),
+            ],
+        )
+        self.assertEqual(warnings, [])
+
+    def test_overrides_drop_other_keys_with_one_warning_for_each_mapping(self):
+        self.set_arista_overrides(
+            {"exec": ["touch /tmp/x"], "binds": ["/etc:/host-etc"], "kind": "x", "mgmt-ipv4": "1.1.1.1"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        nodes = built["topology"]["nodes"]
+        for name, address in (("arista1", "172.20.21.2"), ("arista2", "172.20.21.3")):
+            self.assertEqual(nodes[name]["kind"], "ceos")
+            self.assertEqual(nodes[name]["mgmt-ipv4"], address)
+            self.assertNotIn("exec", nodes[name])
+            self.assertNotIn("binds", nodes[name])
+        self.assertEqual(
+            warnings, [W_OVERRIDE.format(mapping=self.arista_mapping, keys="binds, exec, kind, mgmt-ipv4")]
+        )
+
+    def test_default_mapping_adds_no_override_warning(self):
+        built, warnings, _ = build_topology(new_lab(), [self.leaf1, self.leaf2])
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            built["topology"]["nodes"]["leaf1"],
+            {"kind": "linux", "image": "alpine:latest", "mgmt-ipv4": "172.20.21.2"},
+        )
+
+
 class TopologyYamlTestCase(TopologyTestCase):
     """Test the YAML text of a topology and the containerlab schema check."""
 
@@ -231,3 +281,19 @@ class TopologyYamlTestCase(TopologyTestCase):
         for devices in ([self.leaf1, self.leaf2, self.spine1], [self.arista1, self.nokia1]):
             built, _, _ = build_topology(new_lab(), devices)
             self.assertEqual([error.message for error in validator.iter_errors(built)], [])
+
+    def test_topology_with_overrides_passes_schema(self):
+        self.use_full_kind_names()
+        self.set_arista_overrides(
+            {
+                "env": {"B": "2"},
+                "labels": {"team": "lab", "rack": 4},
+                "cpu-set": "0-1",
+                "shm-size": "1gb",
+                "image-pull-policy": "IfNotPresent",
+                "startup-delay": 5,
+            }
+        )
+        built, _, _ = build_topology(new_lab(), [self.arista1, self.arista2, self.nokia1, self.leaf1])
+        self.assertEqual(built["topology"]["nodes"]["arista1"]["startup-delay"], 5)
+        self.assertEqual([error.message for error in load_clab_schema().iter_errors(built)], [])

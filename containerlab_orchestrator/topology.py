@@ -1,5 +1,6 @@
 """Build a containerlab topology from a lab and its devices."""
 
+import copy
 import ipaddress
 import re
 
@@ -18,6 +19,19 @@ CLAB_NAME_BAD_CHARACTERS = re.compile(r"[^A-Za-z0-9_.-]+")
 MAX_NODE_NAME_LENGTH = 63
 """The longest node name, so that the container name and its host name stay short."""
 
+OVERRIDE_KEYS = frozenset(
+    {"image", "type", "env", "cpu", "memory", "cpu-set", "shm-size", "labels", "image-pull-policy", "startup-delay"}
+)
+"""The overrides keys of a node mapping that the builder merges into the node. It drops each other key.
+
+A key is on the list only when it changes the node container alone. It reads no host file, runs no command, and adds
+no host namespace, device, capability, or privilege. The keys kind, mgmt-ipv4, and startup-config are not on the list,
+because the builder and the startup config own them.
+
+Trust boundary: a user with the add or change permission on NodeMapping writes overrides. A different user can build
+and deploy the lab. Keys such as binds and exec act on the containerlab host, so the builder drops them.
+"""
+
 MGMT_NETWORK_PREFIX = "clab-"
 """The prefix of the management network name. The lab name follows it."""
 
@@ -32,6 +46,9 @@ LAB_NAME_MESSAGE = "Start the lab name with a letter or a digit, so that contain
 
 SUBNET_ROOM_MESSAGE = "Node addresses in the subnet: {room}. Nodes in the topology: {count}. Use a larger subnet."
 """The error for a subnet that has no address for each node."""
+
+W_OVERRIDE = "Mapping {mapping}: the overrides keys {keys} are not allowed. The builder dropped them."
+"""The warning for the overrides keys of a node mapping that are not in OVERRIDE_KEYS."""
 
 
 def _node_order(device):
@@ -81,6 +98,29 @@ def _mapping_node(mapping):
     return {key: value for key, value in values if value not in (None, "", {})}
 
 
+def _merge(node, overrides):
+    """Merge the overrides into the node in sorted key order: a dict into a dict deeply, else a copy of the value."""
+    for key in sorted(overrides):
+        value = overrides[key]
+        if isinstance(value, dict) and isinstance(node.get(key), dict):
+            _merge(node[key], value)
+        else:
+            node[key] = copy.deepcopy(value)
+
+
+def _apply_overrides(node, mapping, warnings, warned_pks):
+    """Merge the allowed overrides of the mapping into the node.
+
+    Add one W_OVERRIDE warning for each mapping pk with a dropped key. The pks that have a warning are in warned_pks.
+    """
+    overrides = mapping.overrides or {}
+    _merge(node, {key: value for key, value in overrides.items() if key in OVERRIDE_KEYS})
+    dropped = sorted(key for key in overrides if key not in OVERRIDE_KEYS)
+    if dropped and mapping.pk not in warned_pks:
+        warned_pks.add(mapping.pk)
+        warnings.append(W_OVERRIDE.format(mapping=mapping, keys=", ".join(dropped)))
+
+
 def _assign_addresses(lab, names):
     """Return the management address of each node name, from offset 2 of the lab subnet.
 
@@ -113,7 +153,14 @@ def build_topology(lab, devices):
     if not unique_devices:
         raise ValidationError(EMPTY_DEVICES_MESSAGE.format(lab=lab))
     ordered = sorted(unique_devices.values(), key=_node_order)
-    device_nodes = [_mapping_node(resolve_mapping(device)) for device in ordered]
+    warnings = []
+    warned_pks = set()
+    device_nodes = []
+    for device in ordered:
+        mapping = resolve_mapping(device)
+        node = _mapping_node(mapping)
+        _apply_overrides(node, mapping, warnings, warned_pks)
+        device_nodes.append(node)
     names = _allocate_names([_base_name(device.name, device.pk) for device in ordered])
     addresses = _assign_addresses(lab, names)
     nodes = {name: {**node, "mgmt-ipv4": addresses[name]} for name, node in zip(names, device_nodes)}
@@ -123,7 +170,7 @@ def build_topology(lab, devices):
         "mgmt": {"network": f"{MGMT_NETWORK_PREFIX}{lab.name}", "ipv4-subnet": lab.mgmt_subnet},
         "topology": {"nodes": nodes},
     }
-    return topology, [], node_devices
+    return topology, warnings, node_devices
 
 
 def to_yaml(topology):
