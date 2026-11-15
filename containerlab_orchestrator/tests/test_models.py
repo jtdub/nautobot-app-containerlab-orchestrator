@@ -558,6 +558,25 @@ class LabSelectionCleanTestCase(LabValidationTestCase):  # pylint: disable=too-m
         )
         self.build_lab(device_filter={}).full_clean()
 
+    def test_device_filter_that_is_not_valid_fails_validation(self):
+        self.assert_errors(
+            self.build_lab(device_filter={"bogus": ["1"]}), {"device_filter": ["bogus: Unknown filter field."]}
+        )
+        self.build_lab(device_filter={"role": ["leaf"]}).full_clean()
+
+    def test_unchanged_stale_filter_passes_validation(self):
+        lab = self.build_lab(device_filter={"role": ["leaf"]})
+        lab.save()
+        Lab.objects.filter(pk=lab.pk).update(device_filter={"role": ["gone"]})
+        lab.refresh_from_db()
+        lab.name = "new-lab-2"
+        lab.full_clean()
+        lab.device_filter = {"role": ["nope"]}
+        self.assert_errors(
+            lab,
+            {"device_filter": ["role: Select a valid choice. nope is not one of the available choices."]},
+        )
+
     def test_dynamic_group_that_is_not_of_devices_fails_validation(self):
         location_group = DynamicGroup.objects.create(
             name="Lab locations", content_type=ContentType.objects.get_for_model(Location)

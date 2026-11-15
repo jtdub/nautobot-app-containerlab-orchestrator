@@ -1,0 +1,1 @@
+Changed the labs REST API to reject a device filter with an unknown key or a bad value, and to show the error of each filter.
