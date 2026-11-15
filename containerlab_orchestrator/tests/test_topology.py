@@ -152,6 +152,12 @@ class BuildTopologyNodesTestCase(TopologyTestCase):
         names = {device.pk: name for name, device in node_devices.items()}
         self.assertEqual([names[device.pk] for device in devices], ["R1", "r1-3", "r1-2"])
 
+    def test_suffixed_node_name_keeps_63_characters(self):
+        devices = [self.add_device("X" * 80, location=self.site1), self.add_device("x" * 80, location=self.site2)]
+        _, _, node_devices = build_topology(new_lab(), devices)
+        names = {device.pk: name for name, device in node_devices.items()}
+        self.assertEqual([names[device.pk] for device in devices], ["X" * 63, "x" * 61 + "-2"])
+
     def test_unnamed_device_gets_a_name_from_its_pk(self):
         unnamed = self.add_device(None)
         self.assertEqual(self.node_names([unnamed]), [f"device-{unnamed.pk.hex[:8]}"])
