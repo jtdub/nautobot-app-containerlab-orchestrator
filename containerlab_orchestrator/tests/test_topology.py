@@ -21,8 +21,10 @@ from containerlab_orchestrator.tests.fixtures import (
 from containerlab_orchestrator.topology import (
     CLAB_NAME_PATTERN,
     EMPTY_DEVICES_MESSAGE,
+    KIND_VARIABLE_MESSAGE,
     SUBNET_ROOM_MESSAGE,
     W_OVERRIDE,
+    W_VARIABLE,
     build_topology,
     to_yaml,
 )
@@ -253,6 +255,75 @@ class BuildTopologyOverridesTestCase(TopologyTestCase):
             built["topology"]["nodes"]["leaf1"],
             {"kind": "linux", "image": "alpine:latest", "mgmt-ipv4": "172.20.21.2"},
         )
+
+    def test_build_leaves_the_mapping_unchanged(self):
+        overrides = {"env": {"A": "$HOME", "B": "2"}, "labels": {"x": "y"}}
+        self.set_arista_overrides(overrides)
+        built, _, _ = build_topology(new_lab(), [self.arista1])
+        stored = NodeMapping.objects.get(pk=self.arista_mapping.pk)
+        self.assertEqual(stored.overrides, overrides)
+        self.assertEqual(stored.env, {"CLAB_MGMT_VRF": "MGMT"})
+        built["topology"]["nodes"]["arista1"]["env"]["B"] = "changed"
+        built["topology"]["nodes"]["arista1"]["labels"]["x"] = "changed"
+        second, _, _ = build_topology(new_lab(), [self.arista1])
+        node = second["topology"]["nodes"]["arista1"]
+        self.assertEqual((node["env"], node["labels"]), ({"CLAB_MGMT_VRF": "MGMT", "B": "2"}, {"x": "y"}))
+
+
+class BuildTopologyVariablesTestCase(TopologyTestCase):
+    """Test that build_topology drops each value that containerlab fills from the host environment."""
+
+    def variable_warning(self, keys):
+        """Return the W_VARIABLE warning of the Arista mapping for the keys."""
+        return W_VARIABLE.format(mapping=self.arista_mapping, keys=keys)
+
+    def test_override_with_a_variable_is_dropped(self):
+        self.set_arista_overrides(
+            {"image": "registry.example/x:${X}", "labels": {"$k": "v"}, "env": {"A": "$HOME"}, "cpu-set": "0-1"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertEqual(node["image"], "ceos:4.32.0F")
+        self.assertEqual(node["env"], {"CLAB_MGMT_VRF": "MGMT"})
+        self.assertEqual(node["cpu-set"], "0-1")
+        self.assertNotIn("labels", node)
+        self.assertEqual(warnings, [self.variable_warning("env.A, image, labels")])
+
+    def test_mapping_value_with_a_variable_is_dropped(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(
+            image="ceos:${TAG}", env={"A": "${SECRET}", "B": "2"}
+        )
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("image", node)
+        self.assertEqual(node["env"], {"B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.A, image")])
+
+    def test_nested_variable_drops_the_key(self):
+        self.set_arista_overrides({"labels": {"team": "lab", "rack": {"row": ["${ROW}"]}}, "env": {"B": {"C": "$X"}}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        node = built["topology"]["nodes"]["arista1"]
+        self.assertNotIn("labels", node)
+        self.assertEqual(node["env"], {"CLAB_MGMT_VRF": "MGMT"})
+        self.assertEqual(warnings, [self.variable_warning("env.B, labels")])
+
+    def test_import_envs_drops_the_env_entry(self):
+        self.set_arista_overrides({"env": {"__IMPORT_ENVS": True, "B": "2"}})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(built["topology"]["nodes"]["arista1"]["env"], {"CLAB_MGMT_VRF": "MGMT", "B": "2"})
+        self.assertEqual(warnings, [self.variable_warning("env.__IMPORT_ENVS")])
+
+    def test_import_envs_alone_drops_the_env_key(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(env={"__IMPORT_ENVS": "true"})
+        built, warnings, _ = build_topology(new_lab(), [self.arista1])
+        self.assertNotIn("env", built["topology"]["nodes"]["arista1"])
+        self.assertEqual(warnings, [self.variable_warning("env.__IMPORT_ENVS")])
+
+    def test_kind_with_a_variable_raises(self):
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(kind="ceos${X}")
+        with self.assertRaises(ValidationError) as context:
+            build_topology(new_lab(), [self.arista1])
+        self.assertEqual(context.exception.messages, [KIND_VARIABLE_MESSAGE.format(mapping=self.arista_mapping)])
 
 
 class TopologyYamlTestCase(TopologyTestCase):

@@ -30,7 +30,14 @@ because the builder and the startup config own them.
 
 Trust boundary: a user with the add or change permission on NodeMapping writes overrides. A different user can build
 and deploy the lab. Keys such as binds and exec act on the containerlab host, so the builder drops them.
+
+Variables: containerlab replaces a $var or ${var} anywhere in the topology with a value from the host environment. The
+env entry __IMPORT_ENVS imports all host variables. So the builder also drops each value with a $ and each
+__IMPORT_ENVS entry, from the overrides and from the mapping fields.
 """
+
+IMPORT_ENVS_KEY = "__IMPORT_ENVS"
+"""The env entry that makes containerlab import all environment variables of the host into the node."""
 
 MGMT_NETWORK_PREFIX = "clab-"
 """The prefix of the management network name. The lab name follows it."""
@@ -49,6 +56,18 @@ SUBNET_ROOM_MESSAGE = "Node addresses in the subnet: {room}. Nodes in the topolo
 
 W_OVERRIDE = "Mapping {mapping}: the overrides keys {keys} are not allowed. The builder dropped them."
 """The warning for the overrides keys of a node mapping that are not in OVERRIDE_KEYS."""
+
+W_VARIABLE = (
+    "Mapping {mapping}: the keys {keys} have a $, and containerlab replaces a $ variable with a value from the host. "
+    "The builder dropped them."
+)
+"""The warning for the node keys and env entries of a mapping that containerlab fills from the host environment."""
+
+KIND_VARIABLE_MESSAGE = (
+    "Mapping {mapping}: the kind has a $. Remove the $, because containerlab replaces a $ variable with a value from "
+    "the host."
+)
+"""The error for a mapping kind with a $. A node with no kind is not valid, so the builder does not drop it."""
 
 
 def _node_order(device):
@@ -108,17 +127,62 @@ def _merge(node, overrides):
             node[key] = copy.deepcopy(value)
 
 
-def _apply_overrides(node, mapping, warnings, warned_pks):
-    """Merge the allowed overrides of the mapping into the node.
+def _has_variable(value):
+    """Return True if a string, a dict key, or a list item at any depth of the value has a $."""
+    if isinstance(value, str):
+        return "$" in value
+    if isinstance(value, dict):
+        return any(_has_variable(key) or _has_variable(item) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_has_variable(item) for item in value)
+    return False
 
-    Add one W_OVERRIDE warning for each mapping pk with a dropped key. The pks that have a warning are in warned_pks.
+
+def _drop_variables(node):
+    """Remove each node key and env entry that containerlab fills from the host environment.
+
+    Returns:
+        The set of dropped names. An env entry has the name env.<entry>.
     """
+    dropped = set()
+    env = node.get("env")
+    if isinstance(env, dict):
+        entries = [name for name, value in env.items() if name == IMPORT_ENVS_KEY or _has_variable({name: value})]
+        for name in entries:
+            del env[name]
+            dropped.add(f"env.{name}")
+        if entries and not env:
+            del node["env"]
+    for key in [key for key, value in node.items() if _has_variable(value)]:
+        del node[key]
+        dropped.add(key)
+    return dropped
+
+
+def _apply_overrides(node, mapping, warnings, warned_pks):
+    """Merge the allowed overrides of the mapping into the node, and drop each value that has a host variable.
+
+    Add one W_OVERRIDE and one W_VARIABLE warning for each mapping pk, when it drops a key. The pks are in warned_pks.
+
+    Raises:
+        ValidationError: If the kind of the mapping has a $.
+    """
+    if _has_variable(mapping.kind):
+        raise ValidationError(KIND_VARIABLE_MESSAGE.format(mapping=mapping))
     overrides = mapping.overrides or {}
-    _merge(node, {key: value for key, value in overrides.items() if key in OVERRIDE_KEYS})
-    dropped = sorted(key for key in overrides if key not in OVERRIDE_KEYS)
-    if dropped and mapping.pk not in warned_pks:
-        warned_pks.add(mapping.pk)
-        warnings.append(W_OVERRIDE.format(mapping=mapping, keys=", ".join(dropped)))
+    allowed = {key: copy.deepcopy(value) for key, value in overrides.items() if key in OVERRIDE_KEYS}
+    variables = _drop_variables(allowed)
+    _merge(node, allowed)
+    variables |= _drop_variables(node)
+    not_allowed = sorted(key for key in overrides if key not in OVERRIDE_KEYS)
+    warning_key = getattr(mapping, "pk", None)
+    if warning_key in warned_pks:
+        return
+    warned_pks.add(warning_key)
+    if not_allowed:
+        warnings.append(W_OVERRIDE.format(mapping=mapping, keys=", ".join(not_allowed)))
+    if variables:
+        warnings.append(W_VARIABLE.format(mapping=mapping, keys=", ".join(sorted(variables))))
 
 
 def _assign_addresses(lab, names):
@@ -144,7 +208,7 @@ def build_topology(lab, devices):
     The caller gives only the devices that the user can view.
 
     Raises:
-        ValidationError: If the lab name or the subnet is not valid, or the device list is empty.
+        ValidationError: If the lab name or the subnet is not valid, the device list is empty, or a kind has a $.
         ImproperlyConfigured: If a device has no mapping and the default_node_mapping setting is not valid.
     """
     if not CLAB_NAME_PATTERN.fullmatch(lab.name or ""):
