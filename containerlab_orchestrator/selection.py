@@ -98,19 +98,22 @@ def validate_device_filter(device_filter):
 
 
 def _group_tree(group):
-    """Return each group of the tree one time, with True if it is the top group or joins a parent by union.
+    """Return each group of the tree one time, with True if the group adds devices to its parent.
 
-    A group that only restricts or excludes devices does not add devices, so it cannot select all devices.
+    The top group adds devices. A child adds devices when it joins by union, or when it is the first child and
+    joins by intersection, because Nautobot starts a set from all devices.
     """
     tree = {group.pk: [group, True]}
     parents = [group]
     while parents:
-        for membership in parents.pop(0).dynamic_group_memberships.select_related("group"):
+        memberships = parents.pop(0).dynamic_group_memberships.select_related("group")
+        for position, membership in enumerate(memberships):
             child = membership.group
             if child.pk not in tree:
                 tree[child.pk] = [child, False]
                 parents.append(child)
-            tree[child.pk][1] = tree[child.pk][1] or membership.operator == "union"
+            adds_devices = membership.operator == "union" or (position == 0 and membership.operator == "intersection")
+            tree[child.pk][1] = tree[child.pk][1] or adds_devices
     return [tuple(entry) for entry in tree.values()]
 
 

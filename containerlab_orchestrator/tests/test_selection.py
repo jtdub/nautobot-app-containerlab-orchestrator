@@ -231,6 +231,7 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
             (self.make_group("All by filter", filter={}), "All by filter"),
             (self.make_group("Empty set", group_type="dynamic-set"), "Empty set"),
             (self.make_set_group("Union set", [(all_child, "union")]), "All child"),
+            (self.make_set_group("Intersection set", [(all_child, "intersection")]), "All child"),
         )
         for group, flagged_name in cases:
             with self.subTest(group=group.name):
