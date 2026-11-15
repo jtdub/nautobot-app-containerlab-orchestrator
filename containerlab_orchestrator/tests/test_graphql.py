@@ -1,5 +1,6 @@
-"""Tests for the ContainerlabHost, NodeMapping, and InterfaceMapping GraphQL types."""
+"""Tests for the GraphQL types of the app."""
 
+from django.urls import reverse
 from nautobot.apps.graphql import execute_query
 from nautobot.apps.testing import TestCase
 
@@ -7,6 +8,9 @@ from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
     create_containerlab_hosts,
     create_interface_mappings,
+    create_lab_devices,
+    create_lab_nodes,
+    create_labs,
     create_node_mappings,
     patch_secret_variables,
 )
@@ -66,6 +70,31 @@ query {
       physical_name
       container_name
     }
+  }
+}
+"""
+
+LABS_QUERY = """
+query {
+  labs {
+    name
+    mgmt_subnet
+    host { name }
+    status { name }
+    dynamic_group { name }
+    devices { name }
+  }
+}
+"""
+
+LAB_NODES_QUERY = """
+query {
+  lab_nodes {
+    node_name
+    is_stub
+    mgmt_ipv4
+    device { name }
+    lab { name }
   }
 }
 """
@@ -174,3 +203,62 @@ class InterfaceMappingGraphQLTestCase(TestCase):
         )
         self.assertEqual(mappings["linux"], [{"physical_name": "ens3", "container_name": "eth1"}])
         self.assertEqual(mappings["nokia_srlinux"], [])
+
+
+class LabGraphQLTestCase(TestCase):
+    """Test the labs and lab_nodes GraphQL queries."""
+
+    @classmethod
+    def setUpTestData(cls):
+        lab_devices = create_lab_devices()
+        create_lab_nodes(create_labs(create_containerlab_hosts(), lab_devices), lab_devices)
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(
+            "containerlab_orchestrator.view_lab",
+            "containerlab_orchestrator.view_labnode",
+            "containerlab_orchestrator.view_containerlabhost",
+            "dcim.view_device",
+            "extras.view_status",
+            "extras.view_dynamicgroup",
+        )
+
+    def test_query_returns_labs(self):
+        result = execute_query(LABS_QUERY, user=self.user)
+
+        self.assertIsNone(result.errors)
+        labs = {(lab["host"]["name"], lab["name"]): lab for lab in result.data["labs"]}
+        self.assertEqual(set(labs), {("clab01", "lab-a"), ("clab01", "lab-b"), ("clab02", "lab-a")})
+        lab_a = labs["clab01", "lab-a"]
+        self.assertEqual(lab_a["mgmt_subnet"], "172.20.21.0/24")
+        self.assertEqual(lab_a["status"], {"name": "Planned"})
+        self.assertEqual(lab_a["devices"], [{"name": "spine1"}])
+        self.assertEqual(labs["clab01", "lab-b"]["dynamic_group"], {"name": "Leaf devices"})
+
+    def test_query_returns_lab_nodes(self):
+        result = execute_query(LAB_NODES_QUERY, user=self.user)
+
+        self.assertIsNone(result.errors)
+        nodes = result.data["lab_nodes"]
+        self.assertEqual(len(nodes), 5)
+        stub = next(node for node in nodes if node["node_name"] == "stub-wan1")
+        self.assertEqual((stub["is_stub"], stub["device"], stub["mgmt_ipv4"]), (True, None, "172.20.21.4"))
+
+    def test_query_for_owner_returns_error(self):
+        """Use the GraphQL API endpoint, because `execute_query` does not validate the field names."""
+        response = self.client.post(
+            reverse("graphql-api"), {"query": "query { labs { owner { username } } }"}, content_type="application/json"
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cannot query field 'owner' on type 'LabType'.", str(response.json()["errors"]))
+
+    def test_filter_arguments(self):
+        labs = execute_query('query { labs(name: "lab-b") { name } }', user=self.user)
+        stubs = execute_query("query { lab_nodes(is_stub: true) { node_name } }", user=self.user)
+
+        self.assertIsNone(labs.errors)
+        self.assertEqual(labs.data["labs"], [{"name": "lab-b"}])
+        self.assertIsNone(stubs.errors)
+        self.assertEqual(stubs.data["lab_nodes"], [{"node_name": "stub-wan1"}])

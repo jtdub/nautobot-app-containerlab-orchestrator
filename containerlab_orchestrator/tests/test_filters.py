@@ -2,12 +2,23 @@
 
 from nautobot.apps.testing import FilterTestCases
 from nautobot.dcim.models import Platform
+from nautobot.extras.models import Status
 
-from containerlab_orchestrator.filters import ContainerlabHostFilterSet, InterfaceMappingFilterSet, NodeMappingFilterSet
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, NodeMapping
+from containerlab_orchestrator.choices import LabStatusChoices
+from containerlab_orchestrator.filters import (
+    ContainerlabHostFilterSet,
+    InterfaceMappingFilterSet,
+    LabFilterSet,
+    LabNodeFilterSet,
+    NodeMappingFilterSet,
+)
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_interface_mappings,
+    create_lab_devices,
+    create_lab_nodes,
+    create_labs,
     create_node_mappings,
 )
 
@@ -119,3 +130,70 @@ class InterfaceMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint:
             with self.subTest(name=name):
                 self.assertIn(name, filters)
         self.assertNotIn("_physical_name", filters)
+
+
+class LabFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot filter tests on LabFilterSet."""
+
+    queryset = Lab.objects.all()
+    filterset = LabFilterSet
+    generic_filter_tests = (
+        ["name"],
+        ["mgmt_subnet"],
+        ["host", "host__name"],
+        ["host", "host__id"],
+        ["owner", "owner__username"],
+        ["owner", "owner__id"],
+        ["status", "status__name"],
+        ["dynamic_group", "dynamic_group__name"],
+        ["devices", "devices__id"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        hosts = create_containerlab_hosts()
+        create_labs(hosts, create_lab_devices())
+        Lab.objects.create(
+            name="lab-c",
+            host=hosts[2],
+            status=Status.objects.get_for_model(Lab).get(name=LabStatusChoices.PLANNED),
+            mgmt_subnet="192.168.50.0/24",
+        )
+
+    def test_q_matches_name_host_and_subnet(self):
+        for value, expected in (
+            ("LAB-B", {"name": "lab-b"}),
+            ("clab02", {"host__name": "clab02"}),
+            ("172.20.22", {"name": "lab-b"}),
+        ):
+            with self.subTest(value=value):
+                result = self.filterset({"q": value}, self.queryset).qs
+                self.assertQuerySetEqual(result, self.queryset.filter(**expected))
+
+    def test_config_source(self):
+        result = self.filterset({"config_source": ["jinja2"]}, self.queryset).qs
+        self.assertQuerySetEqual(result, self.queryset.filter(name="lab-b"))
+
+
+class LabNodeFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
+    """Run the generic Nautobot filter tests on LabNodeFilterSet."""
+
+    queryset = LabNode.objects.all()
+    filterset = LabNodeFilterSet
+    generic_filter_tests = (
+        ["node_name"],
+        ["kind"],
+        ["image"],
+        ["lab", "lab__id"],
+        ["device", "device__name"],
+        ["device", "device__id"],
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        lab_devices = create_lab_devices()
+        create_lab_nodes(create_labs(create_containerlab_hosts(), lab_devices), lab_devices)
+
+    def test_q_matches_stub_node(self):
+        result = self.filterset({"q": "stub"}, self.queryset).qs
+        self.assertQuerySetEqual(result, self.queryset.filter(node_name="stub-wan1"))
