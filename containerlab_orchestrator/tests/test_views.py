@@ -884,6 +884,42 @@ class LabDetailPageTestCase(TestCase):
             with self.subTest(text=text):
                 self.assertBodyContains(response, text)
 
+    def test_selection_panel_shows_dynamic_group(self):
+        lab_b = self.labs[1]
+        leaf_group = self.lab_devices["leaf_group"]
+
+        response = self.client.get(lab_b.get_absolute_url())
+
+        self.assertBodyContains(response, "Leaf devices")
+        self.assertBodyContains(response, f'href="{leaf_group.get_absolute_url()}"')
+
+    def test_nodes_table_shows_stub_kind_image_and_state(self):
+        response = self.get_lab_a_page()
+
+        for text in (
+            'href="?sort=is_stub"',
+            'href="?sort=kind"',
+            'href="?sort=image"',
+            'href="?sort=state"',
+            "ceos:4.32.0F",
+            "alpine:latest",
+            "running",
+        ):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+        self.assertBodyContains(response, '<i class="mdi mdi-check-bold" title="Yes"></i>', count=1)
+
+    def test_panels_show_only_rows_the_user_can_view(self):
+        self.remove_permissions(
+            "containerlab_orchestrator.view_labnode", "dcim.view_device", "extras.view_dynamicgroup"
+        )
+
+        response = self.get_lab_a_page()
+
+        self.assertBodyContains(response, "<strong>Nodes</strong>")
+        self.assertNotContains(response, "stub-wan1")
+        self.assertNotContains(response, f'href="{self.lab_devices["spine1"].get_absolute_url()}"')
+
     @override_settings(PAGINATE_COUNT=2)
     def test_panels_show_all_rows_when_rows_exceed_page_size(self):
         device_link_counts_in_both_tables = {"leaf1": 2, "leaf2": 1, "spine1": 2}
