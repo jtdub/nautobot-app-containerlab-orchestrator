@@ -7,14 +7,15 @@ import unittest
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase, TransactionTestCase, ViewTestCases, create_job_result_and_run_job
-from nautobot.dcim.models import DeviceType, Manufacturer, Platform
+from nautobot.dcim.models import Device, DeviceType, Manufacturer, Platform
 from nautobot.extras.models import ObjectChange, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tables import InterfaceMappingTable
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
@@ -37,6 +38,12 @@ NODE_MAPPING_EDIT_PERMISSIONS = (
     "containerlab_orchestrator.change_nodemapping",
     "containerlab_orchestrator.view_nodemapping",
     "dcim.view_devicetype",
+)
+LAB_DETAIL_PERMISSIONS = (
+    "containerlab_orchestrator.view_lab",
+    "containerlab_orchestrator.view_labnode",
+    "dcim.view_device",
+    "extras.view_dynamicgroup",
 )
 
 
@@ -837,3 +844,156 @@ class LabDiscoveryTestCase(TestCase):
         self.assertContains(response, lab_b.get_absolute_url())
         self.assertNotContains(response, lab_a.get_absolute_url())
         self.assertNotContains(response, lab_a_clab02.get_absolute_url())
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class LabDetailPageTestCase(TestCase):
+    """Test the selection panels, the Devices table, and the Nodes table on the lab page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        _, cls.lab_devices, cls.labs = create_lab_view_data()
+        cls.lab_a = cls.labs[0]
+
+    def setUp(self):
+        super().setUp()
+        self.add_permissions(*LAB_DETAIL_PERMISSIONS)
+
+    def get_lab_a_page(self, query=None):
+        """Return the response of the lab-a (clab01) page."""
+        return self.client.get(self.lab_a.get_absolute_url(), query)
+
+    def test_detail_page_shows_lab_selection_and_nodes(self):
+        response = self.get_lab_a_page()
+
+        for text in (
+            "alice",
+            LabStatusChoices.PLANNED,
+            "clab01",
+            "172.20.21.0/24",
+            "&quot;role&quot;",
+            "spine1",
+            "leaf1",
+            "stub-wan1",
+            "172.20.21.4",
+            ">Lab vendor Lab switch</a>",
+            "<strong>SELECTION</strong>",
+            "<strong>DEVICE FILTER</strong>",
+            "<strong>Devices</strong>",
+            "<strong>Nodes</strong>",
+        ):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+
+    def test_selection_panel_shows_dynamic_group(self):
+        lab_b = self.labs[1]
+        leaf_group = self.lab_devices["leaf_group"]
+
+        response = self.client.get(lab_b.get_absolute_url())
+
+        self.assertBodyContains(response, "Leaf devices")
+        self.assertBodyContains(response, f'href="{leaf_group.get_absolute_url()}"')
+
+    def test_nodes_table_shows_stub_kind_image_and_state(self):
+        response = self.get_lab_a_page()
+
+        for text in (
+            'href="?sort=is_stub"',
+            'href="?sort=kind"',
+            'href="?sort=image"',
+            'href="?sort=state"',
+            "ceos:4.32.0F",
+            "alpine:latest",
+            "running",
+        ):
+            with self.subTest(text=text):
+                self.assertBodyContains(response, text)
+        self.assertBodyContains(response, '<i class="mdi mdi-check-bold" title="Yes"></i>', count=1)
+
+    def test_panels_show_only_rows_the_user_can_view(self):
+        self.remove_permissions("containerlab_orchestrator.view_labnode", "dcim.view_device")
+
+        response = self.get_lab_a_page()
+
+        self.assertBodyContains(response, "<strong>Devices</strong>")
+        self.assertBodyContains(response, "<strong>Nodes</strong>")
+        self.assertNotContains(response, "stub-wan1")
+        self.assertNotContains(response, f'href="{self.lab_devices["spine1"].get_absolute_url()}"')
+
+    def get_devices_card(self, query=None):
+        """Return the HTML of the Devices card of the lab-a (clab01) page."""
+        body = self.get_lab_a_page(query).content.decode()
+        devices_card_start = body.index("<strong>Devices</strong>")
+        return body[devices_card_start : body.find("card-header", devices_card_start)]
+
+    def test_devices_panel_links_unnamed_device(self):
+        leaf1 = self.lab_devices["leaf1"]
+        unnamed = Device.objects.create(
+            name=None, device_type=leaf1.device_type, location=leaf1.location, status=leaf1.status, role=leaf1.role
+        )
+        self.lab_a.devices.set([unnamed])
+
+        devices_card = self.get_devices_card()
+
+        self.assertIn(f'href="{unnamed.get_absolute_url()}"', devices_card)
+        self.assertIn("Unnamed device", devices_card)
+
+    def test_devices_panel_sorts_names_in_natural_order(self):
+        leaf1 = self.lab_devices["leaf1"]
+        leaf10 = Device.objects.create(
+            name="leaf10", device_type=leaf1.device_type, location=leaf1.location, status=leaf1.status, role=leaf1.role
+        )
+        self.lab_a.devices.set([self.lab_devices["leaf2"], leaf10])
+
+        devices_card = self.get_devices_card({"sort": "name"})
+
+        self.assertLess(devices_card.index("leaf2"), devices_card.index("leaf10"))
+
+    @override_settings(PAGINATE_COUNT=2)
+    def test_panels_show_all_rows_when_rows_exceed_page_size(self):
+        device_link_counts_in_both_tables = {"leaf1": 2, "leaf2": 1, "spine1": 2}
+        self.lab_a.devices.set([self.lab_devices[name] for name in device_link_counts_in_both_tables])
+
+        response = self.get_lab_a_page()
+
+        for node_name in ("leaf1", "spine1", "stub-wan1"):
+            with self.subTest(node_name=node_name):
+                self.assertBodyContains(response, node_name)
+        for name, count in device_link_counts_in_both_tables.items():
+            with self.subTest(device=name):
+                self.assertContains(response, f'href="{self.lab_devices[name].get_absolute_url()}"', count=count)
+
+    def test_nodes_panel_sorts_by_the_sort_parameter(self):
+        response = self.get_lab_a_page({"sort": "-node_name"})
+
+        body = response.content.decode()
+        nodes_card_start = body.index("<strong>Nodes</strong>")
+        nodes_card = body[nodes_card_start : body.find("card-header", nodes_card_start)]
+        self.assertLess(nodes_card.index("stub-wan1"), nodes_card.index("leaf1"))
+
+    def test_detail_page_query_count_does_not_grow_with_rows(self):
+        self.lab_a.devices.set([self.lab_devices[name] for name in ("leaf1", "leaf2", "spine1")])
+        self.assertHttpStatus(self.get_lab_a_page(), 200)
+        with CaptureQueriesContext(connection) as few_rows:
+            self.assertHttpStatus(self.get_lab_a_page(), 200)
+        LabNode.objects.bulk_create(
+            LabNode(
+                lab=self.lab_a,
+                node_name=f"node-{number:02d}",
+                device=self.lab_devices["leaf1"],
+                kind="linux",
+                image="alpine:latest",
+            )
+            for number in range(1, 21)
+        )
+
+        with CaptureQueriesContext(connection) as many_rows:
+            response = self.get_lab_a_page()
+
+        self.assertBodyContains(response, "node-20")
+        self.assertLessEqual(len(many_rows), len(few_rows))
+
+    def test_lab_node_url_opens_lab_page(self):
+        node = LabNode.objects.get(lab=self.lab_a, node_name="stub-wan1")
+
+        self.assertEqual(node.get_absolute_url(), self.lab_a.get_absolute_url())

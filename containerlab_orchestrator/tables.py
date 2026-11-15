@@ -1,9 +1,18 @@
 """Tables for the containerlab_orchestrator app."""
 
 import django_tables2 as tables
-from nautobot.apps.tables import BaseTable, BooleanColumn, ButtonsColumn, StatusTableMixin, TagColumn, ToggleColumn
+from nautobot.apps.tables import (
+    BaseTable,
+    BooleanColumn,
+    ButtonsColumn,
+    RoleTableMixin,
+    StatusTableMixin,
+    TagColumn,
+    ToggleColumn,
+)
+from nautobot.dcim.models import Device
 
-from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 
 
 class ContainerlabHostTable(BaseTable):
@@ -100,3 +109,45 @@ class LabTable(StatusTableMixin, BaseTable):
             "actions",
         )
         default_columns = ("pk", "name", "host", "owner", "status", "mgmt_subnet", "built_at", "actions")
+
+
+class LabDeviceTable(StatusTableMixin, RoleTableMixin, BaseTable):  # pylint: disable=nb-sub-class-name
+    """Table of the manual devices of a lab, with no edit or delete buttons."""
+
+    name = tables.TemplateColumn(
+        order_by=("_name",),
+        template_code=(
+            '<a href="{{ record.get_absolute_url }}">'
+            "{{ record.name|default:'<span class=\"badge bg-info\">Unnamed device</span>' }}</a>"
+        ),
+    )
+    location = tables.Column(linkify=True)
+    device_type = tables.TemplateColumn(
+        template_code='<a href="{{ record.device_type.get_absolute_url }}">{{ record.device_type.display }}</a>'
+    )
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for LabDeviceTable."""
+
+        model = Device
+        fields = ("name", "status", "location", "role", "device_type")
+        default_columns = ("name", "status", "location", "role", "device_type")
+
+
+class LabNodeTable(BaseTable):
+    """Table of the node rows of a lab."""
+
+    node_name = tables.Column()
+    device = tables.Column(linkify=True)
+    is_stub = BooleanColumn()
+    kind = tables.Column()
+    image = tables.Column()
+    mgmt_ipv4 = tables.Column()
+    state = tables.Column()
+
+    class Meta(BaseTable.Meta):  # pylint: disable=too-few-public-methods
+        """Meta attributes for LabNodeTable."""
+
+        model = LabNode
+        fields = ("node_name", "device", "is_stub", "kind", "image", "mgmt_ipv4", "state", "container_id")
+        default_columns = ("node_name", "device", "is_stub", "kind", "image", "mgmt_ipv4", "state")
