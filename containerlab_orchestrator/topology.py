@@ -506,11 +506,16 @@ def _device_nodes(devices, warnings):
     return device_nodes, mappings
 
 
+def _linkable_cables(devices, mappings, user, warnings):
+    """Return the CablePair list of the devices and the container name of each linked interface."""
+    pairs, hidden_locals = _collect_cables(devices, user, warnings)
+    return pairs, _link_names(mappings, pairs, hidden_locals, warnings)
+
+
 def _nodes_and_links(devices, user, warnings):
     """Return the nodes with no address, the links, and the device of each node name, with None for a stub."""
     device_nodes, mappings = _device_nodes(devices, warnings)
-    pairs, hidden_locals = _collect_cables(devices, user, warnings)
-    container_names = _link_names(mappings, pairs, hidden_locals, warnings)
+    pairs, container_names = _linkable_cables(devices, mappings, user, warnings)
     stub_warnings = []
     stubs = _stub_links(pairs, container_names, stub_warnings)
     node_names, node_devices = _node_names(devices, list(stubs))
