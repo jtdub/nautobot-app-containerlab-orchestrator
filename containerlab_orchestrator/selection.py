@@ -1,5 +1,7 @@
 """Select the devices of a lab from its device filter, its Dynamic Group, and its device list."""
 
+from contextlib import suppress
+
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.validators import EMPTY_VALUES
@@ -45,8 +47,11 @@ def _value_shape_message(filterset, name, value):
     is_list = isinstance(value, list)
     if not isinstance(value, SCALAR_TYPES) and not (is_list and all(isinstance(item, SCALAR_TYPES) for item in value)):
         return VALUE_SHAPE_MESSAGE
-    if is_list and is_single_choice_field(filterset, name):
+    single_value = is_single_choice_field(filterset, name)
+    if is_list and single_value:
         return LIST_FOR_SINGLE_VALUE_MESSAGE
+    if not single_value and not is_list and not isinstance(value, (str, type(None))):
+        return VALUE_SHAPE_MESSAGE
     return ""
 
 
@@ -92,6 +97,23 @@ def validate_device_filter(device_filter):
     return filterset
 
 
+def _group_tree(group):
+    """Return each group of the tree one time, with True if it is the top group or joins a parent by union.
+
+    A group that only restricts or excludes devices does not add devices, so it cannot select all devices.
+    """
+    tree = {group.pk: [group, True]}
+    parents = [group]
+    while parents:
+        for membership in parents.pop(0).dynamic_group_memberships.select_related("group"):
+            child = membership.group
+            if child.pk not in tree:
+                tree[child.pk] = [child, False]
+                parents.append(child)
+            tree[child.pk][1] = tree[child.pk][1] or membership.operator == "union"
+    return [tuple(entry) for entry in tree.values()]
+
+
 def _check_dynamic_group(group):
     """Reject a Dynamic Group of other objects, a group with a bad filter, and a group that selects all devices.
 
@@ -101,17 +123,18 @@ def _check_dynamic_group(group):
     if group.content_type_id != ContentType.objects.get_for_model(Device).pk:
         raise ValidationError({"dynamic_group": [NOT_DEVICE_GROUP_MESSAGE]})
     messages = []
-    for member_group in [group, *group.get_descendants()]:
-        if member_group.group_type == "dynamic-filter":
-            if not member_group.filter:
+    for member_group, adds_devices in _group_tree(group):
+        selects_all = (member_group.group_type == "dynamic-filter" and not member_group.filter) or (
+            member_group.group_type == "dynamic-set" and not member_group.children.exists()
+        )
+        if selects_all:
+            if adds_devices:
                 messages.append(f"{member_group}: {MATCH_ALL_GROUP_MESSAGE}")
-                continue
+        elif member_group.group_type == "dynamic-filter":
             try:
                 validate_device_filter(member_group.filter)
             except ValidationError as error:
                 messages.extend(f"{member_group}: {message}" for message in error.message_dict["device_filter"])
-        elif member_group.group_type == "dynamic-set" and not member_group.children.exists():
-            messages.append(f"{member_group}: {MATCH_ALL_GROUP_MESSAGE}")
     if messages:
         raise ValidationError({"dynamic_group": messages})
 
@@ -121,11 +144,9 @@ def _refreshed_members(group):
 
     If another refresh of the group runs at the same time, return the cached members.
     """
-    try:
-        with transaction.atomic():
-            return group.update_cached_members()
-    except IntegrityError:
-        return group.members
+    with suppress(IntegrityError), transaction.atomic():
+        group.update_cached_members()
+    return group.members
 
 
 def select_devices(lab, user=None):

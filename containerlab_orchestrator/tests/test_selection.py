@@ -2,6 +2,7 @@
 
 from unittest import mock
 
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -50,6 +51,13 @@ class SelectionTestCase(TestCase):
         Lab.objects.filter(pk=lab.pk).update(**fields)
         lab.refresh_from_db()
         return lab
+
+    def make_set_group(self, name, children):
+        """Return a saved dynamic-set group of devices with these (child, operator) pairs."""
+        group = self.make_group(name, group_type="dynamic-set")
+        for weight, (child, operator) in enumerate(children, start=1):
+            group.add_child(child, operator, weight * 10)
+        return group
 
     def assert_selects(self, lab, names, user=None):
         """Assert that select_devices gives exactly the devices with these names."""
@@ -132,6 +140,24 @@ class SelectDevicesTestCase(SelectionTestCase):  # pylint: disable=too-many-ance
     def test_no_user_applies_no_limit(self):
         self.assert_selects(self.lab_a, {"leaf1", "leaf2", "spine1"})
 
+    def test_superuser_and_exempt_user_see_all_devices(self):
+        superuser = get_user_model().objects.create_user(username="root", is_superuser=True)
+        self.assert_selects(self.lab_a, {"leaf1", "leaf2", "spine1"}, user=superuser)
+        with override_settings(EXEMPT_VIEW_PERMISSIONS=["dcim.device"]):
+            self.assert_selects(self.lab_a, {"leaf1", "leaf2", "spine1"}, user=self.user)
+
+    def test_static_dynamic_group_selects_its_members(self):
+        group = self.make_group("Static devices", group_type="static")
+        group.add_members([self.lab_devices["spine1"]])
+        self.assert_selects(self.make_lab(dynamic_group=group), {"spine1"})
+
+    def test_empty_child_that_restricts_selection_passes(self):
+        group = self.make_set_group(
+            "Leaf set",
+            [(self.lab_devices["leaf_group"], "union"), (self.make_group("All restrict", filter={}), "intersection")],
+        )
+        self.assert_selects(self.make_lab(dynamic_group=group), {"leaf1", "leaf2"})
+
 
 class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-ancestors
     """Test the errors of validate_device_filter and select_devices."""
@@ -148,6 +174,10 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
             ({"role": []}, ["role: Enter a value."]),
             ({"role": None}, ["role: Enter a value."]),
             ({"q": ""}, ["q: Enter a value."]),
+            ({"has_primary_ip": "maybe"}, ["has_primary_ip: Enter a value."]),
+            ({"name": 5}, ["name: Use a value or a list of values."]),
+            ({"name": True}, ["name: Use a value or a list of values."]),
+            ({"position": 1.5}, ["position: Use a value or a list of values."]),
             (
                 {"zeta": ["1"], "bogus": ["1"], "role": ["nope"]},
                 ["bogus: Unknown filter field.", BAD_ROLE_MESSAGE, "zeta: Unknown filter field."],
@@ -196,11 +226,20 @@ class SelectionErrorTestCase(SelectionTestCase):  # pylint: disable=too-many-anc
                 self.assert_select_errors(lab, {"dynamic_group": messages})
 
     def test_match_all_dynamic_group_raises_error(self):
-        groups = (
-            self.make_group("All by filter", filter={}),
-            self.make_group("Empty set", group_type="dynamic-set"),
+        all_child = self.make_group("All child", filter={})
+        cases = (
+            (self.make_group("All by filter", filter={}), "All by filter"),
+            (self.make_group("Empty set", group_type="dynamic-set"), "Empty set"),
+            (self.make_set_group("Union set", [(all_child, "union")]), "All child"),
         )
-        for group in groups:
+        for group, flagged_name in cases:
             with self.subTest(group=group.name):
                 lab = self.make_lab(dynamic_group=group)
-                self.assert_select_errors(lab, {"dynamic_group": [f"{group.name}: This group selects all devices."]})
+                self.assert_select_errors(lab, {"dynamic_group": [f"{flagged_name}: This group selects all devices."]})
+
+    def test_bad_child_group_raises_error_once(self):
+        child = self.make_group("Bad child", filter={"role": ["leaf"]})
+        group = self.make_set_group("Bad set", [(child, "union"), (child, "union")])
+        DynamicGroup.objects.filter(pk=child.pk).update(filter={"bogus": ["1"]})
+        lab = self.make_lab(dynamic_group=group)
+        self.assert_select_errors(lab, {"dynamic_group": ["Bad child: bogus: Unknown filter field."]})
