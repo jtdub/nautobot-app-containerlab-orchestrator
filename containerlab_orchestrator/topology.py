@@ -6,13 +6,15 @@ import re
 from typing import NamedTuple
 
 import yaml
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from nautobot.apps.config import get_app_settings_or_config
 from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
 from nautobot.apps.models import naturalize_interface
-from nautobot.dcim.models import Interface
+from nautobot.dcim.models import Device, Interface
 
-from containerlab_orchestrator.mapper import map_interfaces, resolve_mapping
-from containerlab_orchestrator.validators import subnet_node_room, validate_ipv4_network
+from containerlab_orchestrator.constants import APP_NAME
+from containerlab_orchestrator.mapper import FALLBACK_INTERFACE_PREFIX, map_interfaces, resolve_mapping
+from containerlab_orchestrator.validators import subnet_node_room, validate_image_reference, validate_ipv4_network
 
 CLAB_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 """A node name or a topology name that the containerlab schema accepts."""
@@ -53,6 +55,12 @@ MGMT_NETWORK_PREFIX = "clab-"
 FIRST_NODE_OFFSET = 2
 """The offset of the first node address in the subnet. Docker gives the address at offset 1 to the gateway."""
 
+STUB_KIND = "linux"
+"""The containerlab kind of a stub node."""
+
+STUB_PREFIX = "stub-"
+"""The prefix of a stub node name. The name of the far device follows it."""
+
 EMPTY_DEVICES_MESSAGE = "Lab {lab} has no device to build."
 """The error for a build with no device."""
 
@@ -61,6 +69,14 @@ LAB_NAME_MESSAGE = "Start the lab name with a letter or a digit, so that contain
 
 SUBNET_ROOM_MESSAGE = "Node addresses in the subnet: {room}. Nodes in the topology: {count}. Use a larger subnet."
 """The error for a subnet that has no address for each node."""
+
+STUB_IMAGE_MESSAGE = "The stub_node_image setting is not valid: {message}"
+"""The error for a stub_node_image setting that is not a valid image name."""
+
+STUB_IMAGE_VARIABLE_TEXT = (
+    "it has a $ variable or a Go template action, which containerlab replaces before it reads the topology."
+)
+"""The reason in STUB_IMAGE_MESSAGE for an image with a marker of HOST_VARIABLE_MARKERS."""
 
 W_OVERRIDE = "Mapping {mapping}: the overrides keys {keys} are not allowed. The builder dropped them."
 """The warning for the overrides keys of a node mapping that are not in OVERRIDE_KEYS."""
@@ -96,6 +112,9 @@ W_NOT_INTERFACE = "the cable goes to a {kind}, not to an interface. The builder 
 W_NO_FAR_DEVICE = "the cable goes to an interface with no device. The builder skipped it."
 """The warning for a cable to an interface on a module that is in no module bay."""
 
+W_HIDDEN = "the cable goes to a device that you cannot view. The builder skipped it."
+"""The warning for a cable to a device outside the selection that the user cannot view."""
+
 W_NO_NAME = "the interface has no container name. The builder skipped its cable."
 """The warning for a cable on an interface that map_interfaces gives no container name."""
 
@@ -122,10 +141,12 @@ def _node_order(device):
     return (device.name or "", str(device.pk))
 
 
-def _base_name(name, pk):
-    """Return a node name that the containerlab schema accepts, or a name from the pk if no character is left."""
-    cleaned = CLAB_NAME_BAD_CHARACTERS.sub("-", name or "").lstrip("_.-")[:MAX_NODE_NAME_LENGTH]
-    return cleaned or f"device-{pk.hex[:8]}"
+def _base_name(name, pk, prefix=""):
+    """Return a node name that the containerlab schema accepts, or a name from the pk if no letter or digit is left."""
+    cleaned = CLAB_NAME_BAD_CHARACTERS.sub("-", name or "")
+    if not cleaned.lstrip("_.-"):
+        return f"{prefix}device-{pk.hex[:8]}"
+    return f"{prefix}{cleaned}".lstrip("_.-")[:MAX_NODE_NAME_LENGTH]
 
 
 def _allocate_names(bases):
@@ -300,10 +321,21 @@ def _skip_text(local, peers):
     return None
 
 
-def _collect_cables(devices, warnings):
+def _visible_device_pks(device_pks, user):
+    """Return the pks of the devices that the user can view, or None if no user is given."""
+    if user is None:
+        return None
+    return set(Device.objects.restrict(user, "view").filter(pk__in=device_pks).values_list("pk", flat=True))
+
+
+def _collect_cables(devices, user, warnings):
     """Return a CablePair for each cable of the devices that the builder can link, in node order.
 
-    Add one warning for each cable that it skips.
+    Add one warning for each cable that it skips. A cable to an outside device that the user cannot view is
+    skipped before a rule reads its far end.
+
+    Returns:
+        The pairs, and the local interfaces of the cables to the devices that the user cannot view.
     """
     selected_pks = {device.pk for device in devices}
     seen_cable_ids = set()
@@ -319,28 +351,37 @@ def _collect_cables(devices, warnings):
                 _add_cable_warning(warnings, local, text)
             else:
                 candidates.append((local, peers[0]))
+    visible_pks = _visible_device_pks({peer.parent.pk for _, peer in candidates} - selected_pks, user)
     pairs = []
+    hidden_locals = []
     for local, peer in candidates:
-        if peer.mgmt_only:
+        if visible_pks is not None and peer.parent.pk not in selected_pks and peer.parent.pk not in visible_pks:
+            _add_cable_warning(warnings, local, W_HIDDEN)
+            hidden_locals.append(local)
+        elif peer.mgmt_only:
             _add_cable_warning(warnings, local, W_MGMT_ONLY)
         elif len(_cable_peers(peer)) > 1:
             _add_cable_warning(warnings, local, W_BREAKOUT)
         else:
             pairs.append(CablePair(local, peer, peer.parent.pk in selected_pks))
-    return pairs
+    return pairs, hidden_locals
 
 
-def _link_names(mappings, pairs, warnings):
+def _link_names(mappings, pairs, hidden_locals, warnings):
     """Return the container name of each linked interface, from one map_interfaces call for each device.
 
-    The interfaces of a device are the local ends of its pairs and the far ends of the internal pairs on it.
+    The interfaces of a device are the local ends of its pairs, the far ends of the internal pairs on it, and its
+    hidden_locals. So the container names do not depend on the permissions of the user.
 
     Args:
         mappings: The mapping of each device pk, in node order.
         pairs: The CablePair list of _collect_cables.
+        hidden_locals: The local interfaces of the cables to devices that the user cannot view.
         warnings: The list that gets the map_interfaces warnings, in node order.
     """
     interfaces = {device_pk: set() for device_pk in mappings}
+    for local in hidden_locals:
+        interfaces[local.parent.pk].add(local)
     for pair in pairs:
         interfaces[pair.local.parent.pk].add(pair.local)
         if pair.internal:
@@ -378,6 +419,79 @@ def _internal_links(pairs, node_names, container_names, warnings):
     return links
 
 
+def _stub_links(pairs, container_names, warnings):
+    """Return the stub interfaces of each far device outside the selection, in node order of the far devices.
+
+    Each stub interface is a pair of its ethN name and the local interface. A pair whose local end has no valid
+    container name is skipped with a warning. A far device with no pair left gets no stub.
+    """
+    groups = {}
+    for pair in pairs:
+        if pair.internal:
+            continue
+        text = _name_problem(pair.local, container_names)
+        if text:
+            _add_cable_warning(warnings, pair.local, text)
+        else:
+            groups.setdefault(pair.far.parent, []).append(pair)
+    return {
+        far_device: [
+            (f"{FALLBACK_INTERFACE_PREFIX}{number}", pair.local)
+            for number, pair in enumerate(sorted(groups[far_device], key=lambda pair: _interface_key(pair.far)), 1)
+        ]
+        for far_device in sorted(groups, key=_node_order)
+    }
+
+
+def _stub_image():
+    """Return the stub_node_image setting.
+
+    Raises:
+        ImproperlyConfigured: If the setting is not a valid image name, or has a marker of HOST_VARIABLE_MARKERS.
+    """
+    image = get_app_settings_or_config(APP_NAME, "stub_node_image")
+    try:
+        validate_image_reference(image)
+    except ValidationError as error:
+        raise ImproperlyConfigured(STUB_IMAGE_MESSAGE.format(message=" ".join(error.messages))) from error
+    if _has_variable(image):
+        raise ImproperlyConfigured(STUB_IMAGE_MESSAGE.format(message=STUB_IMAGE_VARIABLE_TEXT))
+    return image
+
+
+def _stub_nodes(stubs, node_names, container_names):
+    """Return the node of each stub and the link of each stub interface.
+
+    The stub interface names are FALLBACK_INTERFACE_PREFIX and a number, so they cannot hold a host variable marker.
+    """
+    if not stubs:
+        return {}, []
+    image = _stub_image()
+    nodes = {node_names[far_device.pk]: {"kind": STUB_KIND, "image": image} for far_device in stubs}
+    links = [
+        {
+            "endpoints": sorted(
+                [f"{node_names[local.parent.pk]}:{container_names[local]}", f"{node_names[far_device.pk]}:{stub_end}"]
+            )
+        }
+        for far_device, ends in stubs.items()
+        for stub_end, local in ends
+    ]
+    return nodes, links
+
+
+def _node_names(devices, far_devices):
+    """Return the node name of each device pk and far device pk, and the device of each name, with None for a stub.
+
+    The stubs of the far devices get their names after the devices.
+    """
+    bases = [_base_name(device.name, device.pk) for device in devices]
+    bases += [_base_name(device.name, device.pk, STUB_PREFIX) for device in far_devices]
+    names = _allocate_names(bases)
+    node_names = {owner.pk: name for owner, name in zip([*devices, *far_devices], names)}
+    return node_names, dict(zip(names, [*devices, *[None] * len(far_devices)]))
+
+
 def _device_nodes(devices, warnings):
     """Return the node of each device and the mapping of each device pk, in the order of the devices."""
     warned_pks = set()
@@ -392,34 +506,44 @@ def _device_nodes(devices, warnings):
     return device_nodes, mappings
 
 
-def build_topology(lab, devices):
+def _nodes_and_links(devices, user, warnings):
+    """Return the nodes with no address, the links, and the device of each node name, with None for a stub."""
+    device_nodes, mappings = _device_nodes(devices, warnings)
+    pairs, hidden_locals = _collect_cables(devices, user, warnings)
+    container_names = _link_names(mappings, pairs, hidden_locals, warnings)
+    stub_warnings = []
+    stubs = _stub_links(pairs, container_names, stub_warnings)
+    node_names, node_devices = _node_names(devices, list(stubs))
+    links = _internal_links(pairs, node_names, container_names, warnings)
+    warnings.extend(stub_warnings)
+    stub_nodes, stub_links = _stub_nodes(stubs, node_names, container_names)
+    nodes = {node_names[device.pk]: node for device, node in zip(devices, device_nodes)}
+    return {**nodes, **stub_nodes}, links + stub_links, node_devices
+
+
+def build_topology(lab, devices, user=None):
     """Return the containerlab topology of the lab, the build warnings, and the device of each node name.
 
-    The caller gives only the devices that the user can view.
+    The caller gives only the devices that the user can view. With a user, a cable to an outside device that the
+    user cannot view gets no stub. The device of a stub node name is None.
 
     Raises:
         ValidationError: If the lab name or the subnet is not valid, the device list is empty, or a kind has a marker.
-        ImproperlyConfigured: If a device has no mapping and the default_node_mapping setting is not valid.
+        ImproperlyConfigured: If the default_node_mapping setting, or the stub_node_image setting for a stub, is not
+            valid.
     """
     if not CLAB_NAME_PATTERN.fullmatch(lab.name or ""):
         raise ValidationError({"name": [LAB_NAME_MESSAGE]})
     unique_devices = {device.pk: device for device in devices}
     if not unique_devices:
         raise ValidationError(EMPTY_DEVICES_MESSAGE.format(lab=lab))
-    ordered = sorted(unique_devices.values(), key=_node_order)
     warnings = []
-    device_nodes, mappings = _device_nodes(ordered, warnings)
-    pairs = _collect_cables(ordered, warnings)
-    container_names = _link_names(mappings, pairs, warnings)
-    names = _allocate_names([_base_name(device.name, device.pk) for device in ordered])
-    links = _internal_links(pairs, {device.pk: name for name, device in zip(names, ordered)}, container_names, warnings)
-    addresses = _assign_addresses(lab, names)
-    nodes = {name: {**node, "mgmt-ipv4": addresses[name]} for name, node in zip(names, device_nodes)}
-    node_devices = dict(zip(names, ordered))
+    nodes, links, node_devices = _nodes_and_links(sorted(unique_devices.values(), key=_node_order), user, warnings)
+    addresses = _assign_addresses(lab, list(nodes))
     topology = {
         "name": lab.name,
         "mgmt": {"network": f"{MGMT_NETWORK_PREFIX}{lab.name}", "ipv4-subnet": lab.mgmt_subnet},
-        "topology": {"nodes": nodes},
+        "topology": {"nodes": {name: {**node, "mgmt-ipv4": addresses[name]} for name, node in nodes.items()}},
     }
     if links:
         topology["topology"]["links"] = sorted(links, key=lambda link: link["endpoints"])

@@ -21,6 +21,7 @@ class ContainerlabOrchestratorConfig(NautobotAppConfig):
     default_settings = {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
         "request_timeout": 300,
+        "stub_node_image": "alpine:latest",
     }
     docs_view_name = "plugins:containerlab_orchestrator:docs"
     searchable_models = ["containerlabhost", "lab"]

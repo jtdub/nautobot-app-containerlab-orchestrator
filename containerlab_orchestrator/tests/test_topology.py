@@ -6,7 +6,8 @@ from unittest import mock, skipUnless
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.test import override_settings
 from jsonschema import Draft7Validator
 from nautobot.apps.testing import TestCase
 from nautobot.circuits.models import Circuit, CircuitTermination, CircuitType, Provider
@@ -26,12 +27,14 @@ from nautobot.dcim.models import (
 from nautobot.extras.models import Role, Status
 
 from containerlab_orchestrator import topology
+from containerlab_orchestrator.constants import APP_NAME
 from containerlab_orchestrator.models import InterfaceMapping, Lab, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_interface_mappings,
     create_lab_devices,
     create_node_mappings,
 )
+from containerlab_orchestrator.tests.test_app_config import validated_config
 from containerlab_orchestrator.topology import (
     CLAB_NAME_PATTERN,
     EMPTY_DEVICES_MESSAGE,
@@ -613,5 +616,151 @@ class TopologyYamlTestCase(TopologyTestCase):
         built, _, _ = build_topology(new_lab(), [self.arista1, self.arista2])
         second, _, _ = build_topology(new_lab(), [self.arista2, self.arista1])
         self.assertEqual(built["topology"]["links"], [{"endpoints": ["arista1:eth1", "arista2:eth2"]}])
+        self.assertEqual(to_yaml(built), to_yaml(second))
+        self.assertEqual([error.message for error in load_clab_schema().iter_errors(built)], [])
+
+
+class BuildTopologyStubsTestCase(TopologyTestCase):
+    """Test the stub nodes that build_topology adds for the devices outside the selection."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Add the outside devices wan1 and wan2."""
+        super().setUpTestData()
+        cls.wan1 = cls.add_device("wan1")
+        cls.wan2 = cls.add_device("wan2")
+
+    def cable_to_outside(self, local_device, local_name, far_device, far_name):
+        """Return the local and the far interface of a new cable between the two devices."""
+        (local,) = self.add_interfaces(local_device, local_name)
+        (far,) = self.add_interfaces(far_device, far_name)
+        self.connect(local, far)
+        return local, far
+
+    def cable_three_stub_links(self):
+        """Cable two arista1 interfaces to wan1, and one arista2 interface to wan2."""
+        self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/2")
+        self.cable_to_outside(self.arista1, "GigabitEthernet0/2", self.wan1, "GigabitEthernet0/1")
+        self.cable_to_outside(self.arista2, "GigabitEthernet0/1", self.wan2, "GigabitEthernet0/1")
+
+    def test_outside_devices_give_one_stub_each(self):
+        self.cable_three_stub_links()
+        built, warnings, node_devices = build_topology(new_lab(), [self.arista2, self.arista1])
+        nodes = built["topology"]["nodes"]
+        self.assertEqual(list(nodes), ["arista1", "arista2", "stub-wan1", "stub-wan2"])
+        for name, address in (("stub-wan1", "172.20.21.4"), ("stub-wan2", "172.20.21.5")):
+            self.assertEqual(nodes[name], {"kind": "linux", "image": "alpine:latest", "mgmt-ipv4": address})
+        links = [link["endpoints"] for link in built["topology"]["links"]]
+        self.assertEqual(
+            links,
+            [
+                ["arista1:eth1", "stub-wan1:eth2"],
+                ["arista1:eth2", "stub-wan1:eth1"],
+                ["arista2:eth1", "stub-wan2:eth1"],
+            ],
+        )
+        for _, stub_end in links:
+            self.assertRegex(stub_end, r"^stub-wan[12]:eth[1-9][0-9]*$")
+        self.assertEqual(
+            node_devices, {"arista1": self.arista1, "arista2": self.arista2, "stub-wan1": None, "stub-wan2": None}
+        )
+        self.assertEqual(warnings, [])
+
+    def test_stub_names_follow_the_containerlab_rule(self):
+        far_devices = [self.add_device("WAN 1/A"), self.add_device("///")]
+        for number, far_device in enumerate(far_devices, start=1):
+            self.cable_to_outside(self.arista1, f"GigabitEthernet0/{number}", far_device, "GigabitEthernet0/1")
+        self.cable_to_outside(self.arista2, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
+        lookalike = self.add_device("stub-wan1")
+        _, _, node_devices = build_topology(new_lab(), [self.arista1, self.arista2, lookalike])
+        self.assertEqual(
+            list(node_devices),
+            [
+                "arista1",
+                "arista2",
+                "stub-wan1",
+                f"stub-device-{far_devices[1].pk.hex[:8]}",
+                "stub-WAN-1-A",
+                "stub-wan1-2",
+            ],
+        )
+        self.assertEqual(node_devices["stub-wan1"], lookalike)
+
+    def test_stub_uses_stub_node_image_setting(self):
+        self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
+        with override_settings(
+            PLUGINS_CONFIG={APP_NAME: validated_config({"stub_node_image": "registry.local/alpine:3"})}
+        ):
+            built, _, _ = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(built["topology"]["nodes"]["stub-wan1"]["image"], "registry.local/alpine:3")
+        for image in ("bad image", "alpine:${TAG}", "alpine:{{.Tag}}"):
+            with self.subTest(image=image):
+                config = validated_config({"stub_node_image": image})
+                with override_settings(PLUGINS_CONFIG={APP_NAME: config}):
+                    with self.assertRaises(ImproperlyConfigured) as context:
+                        build_topology(new_lab(), [self.arista1])
+                    self.assertTrue(str(context.exception).startswith("The stub_node_image setting is not valid: "))
+                    built, _, _ = build_topology(new_lab(), [self.arista2])
+                self.assertEqual(list(built["topology"]["nodes"]), ["arista2"])
+
+    def test_hidden_far_device_is_skipped_without_its_name(self):
+        (hidden_local, _) = self.cable_to_outside(self.arista1, "Ethernet1", self.wan1, "Uplink-secret")
+        self.cable_to_outside(self.arista1, "Ethernet2", self.arista2, "GigabitEthernet0/1")
+        self.add_permissions("dcim.view_device", constraints={"name__in": ["arista1", "arista2"]})
+        built, warnings, node_devices = build_topology(new_lab(), [self.arista1, self.arista2], self.user)
+        self.assertEqual(list(node_devices), ["arista1", "arista2"])
+        self.assertEqual(built["topology"]["links"], [{"endpoints": ["arista1:eth4", "arista2:eth1"]}])
+        self.assertIn(self.cable_warning(hidden_local, topology.W_HIDDEN), warnings)
+        for warning in warnings:
+            self.assertNotIn("wan1", warning)
+            self.assertNotIn("Uplink-secret", warning)
+        unrestricted, _, unrestricted_devices = build_topology(new_lab(), [self.arista1, self.arista2])
+        self.assertEqual(list(unrestricted_devices), ["arista1", "arista2", "stub-wan1"])
+        self.assertEqual(
+            [link["endpoints"] for link in unrestricted["topology"]["links"]],
+            [["arista1:eth3", "stub-wan1:eth1"], ["arista1:eth4", "arista2:eth1"]],
+        )
+
+    def test_far_device_with_all_links_skipped_gets_no_stub(self):
+        local_marked, _ = self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
+        (local_data,) = self.add_interfaces(self.arista1, "GigabitEthernet0/2")
+        self.connect(local_data, self.add_interfaces(self.wan1, "GigabitEthernet0/2", mgmt_only=True)[0])
+        InterfaceMapping.objects.filter(node_mapping=self.arista_mapping, physical_name="GigabitEthernet0/1").update(
+            container_name="eth${X}"
+        )
+        built, warnings, node_devices = build_topology(new_lab(), [self.arista1])
+        self.assertEqual(list(node_devices), ["arista1"])
+        self.assertNotIn("links", built["topology"])
+        self.assertEqual(
+            warnings,
+            [self.cable_warning(local_data, W_MGMT_ONLY), self.cable_warning(local_marked, W_NAME_VARIABLE)],
+        )
+
+    def test_stubs_count_against_the_subnet(self):
+        self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
+        self.cable_to_outside(self.arista2, "GigabitEthernet0/1", self.wan2, "GigabitEthernet0/1")
+        self.cable_to_outside(self.nokia1, "ethernet-1/1", self.add_device("wan3"), "GigabitEthernet0/1")
+        devices = [self.arista1, self.arista2, self.nokia1]
+        with self.assertRaises(ValidationError) as context:
+            build_topology(new_lab(mgmt_subnet="10.0.0.0/29"), devices)
+        self.assertEqual(context.exception.message_dict, {"mgmt_subnet": [SUBNET_ROOM_MESSAGE.format(room=5, count=6)]})
+        built, _, _ = build_topology(new_lab(mgmt_subnet="10.0.0.0/28"), devices)
+        self.assertEqual(
+            {name: node["mgmt-ipv4"] for name, node in built["topology"]["nodes"].items()},
+            {
+                "arista1": "10.0.0.2",
+                "arista2": "10.0.0.3",
+                "nokia1": "10.0.0.4",
+                "stub-wan1": "10.0.0.5",
+                "stub-wan2": "10.0.0.6",
+                "stub-wan3": "10.0.0.7",
+            },
+        )
+
+    def test_stubs_pass_schema_and_repeat(self):
+        self.use_full_kind_names()
+        self.cable_three_stub_links()
+        built, _, _ = build_topology(new_lab(), [self.arista1, self.arista2])
+        second, _, _ = build_topology(new_lab(), [self.arista2, self.arista1])
         self.assertEqual(to_yaml(built), to_yaml(second))
         self.assertEqual([error.message for error in load_clab_schema().iter_errors(built)], [])

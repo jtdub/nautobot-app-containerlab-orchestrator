@@ -125,5 +125,6 @@ PLUGINS_CONFIG = {
     "containerlab_orchestrator": {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
         "request_timeout": 300,
+        "stub_node_image": "alpine:latest",
     }
 }
