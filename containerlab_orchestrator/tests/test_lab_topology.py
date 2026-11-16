@@ -71,7 +71,7 @@ class LabTopologyAPITestCase(APITestCase):  # pylint: disable=too-many-ancestors
         self.assertHttpStatus(response, status.HTTP_404_NOT_FOUND)
         self.assertNotIn(STORED_YAML, response.content.decode())
 
-    def test_csv_accept_gives_406(self):
+    def test_csv_request_gets_no_topology_file(self):
         self.add_permissions("containerlab_orchestrator.view_lab")
         cases = {
             "accept": (topology_url(self.lab_a), {"HTTP_ACCEPT": "text/csv"}, status.HTTP_406_NOT_ACCEPTABLE),

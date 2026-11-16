@@ -63,7 +63,11 @@ class LabViewSet(NautobotModelViewSet):  # pylint: disable=too-many-ancestors
     serializer_class = LabSerializer
     filterset_class = LabFilterSet
 
-    @extend_schema(methods=["get"], responses=OpenApiTypes.STR)
+    @extend_schema(
+        methods=["get"],
+        description="Download the stored topology YAML of the lab as `<lab>.clab.yml`.",
+        responses={(200, "application/yaml"): OpenApiTypes.STR},
+    )
     @action(detail=True, methods=["get"], url_path="topology", renderer_classes=TOPOLOGY_RENDERERS)
     def topology(self, request, pk=None):  # pylint: disable=unused-argument
         """Download the stored topology YAML of the lab as `<lab>.clab.yml`.
