@@ -124,6 +124,7 @@ PLUGINS = ["containerlab_orchestrator", "nautobot_plugin_nornir", "nautobot_gold
 PLUGINS_CONFIG = {
     "containerlab_orchestrator": {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "max_lab_devices": 100,
         "request_timeout": 300,
         "stub_node_image": "alpine:latest",
     }

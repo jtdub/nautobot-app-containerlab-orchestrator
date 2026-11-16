@@ -20,6 +20,7 @@ class ContainerlabOrchestratorConfig(NautobotAppConfig):
     required_settings = []
     default_settings = {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "max_lab_devices": 100,
         "request_timeout": 300,
         "stub_node_image": "alpine:latest",
     }
