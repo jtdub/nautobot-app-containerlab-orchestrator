@@ -597,7 +597,9 @@ def _add_startup_configs(context, device_nodes, mappings, container_names, warni
     """
     interface_maps = _interface_maps(mappings, container_names)
     for device, node in zip(context.devices, device_nodes):
-        text, config_warnings = get_startup_config(device, mappings[device.pk], interface_maps[device.pk], context.lab)
+        text, config_warnings = get_startup_config(
+            device, mappings[device.pk], interface_maps[device.pk], context.lab, context.user
+        )
         warnings.extend(config_warnings)
         if text is not None:
             node["startup-config"] = _containerlab_text(text, node["kind"])

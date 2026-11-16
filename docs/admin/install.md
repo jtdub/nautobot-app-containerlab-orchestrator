@@ -35,6 +35,13 @@ To ensure Containerlab Orchestrator is automatically re-installed during future 
 echo containerlab-orchestrator >> local_requirements.txt
 ```
 
+To use the Golden Config startup config sources, install the `golden-config` extra. It installs Nautobot Golden
+Config and Nautobot Plugin Nornir:
+
+```shell
+pip install "containerlab-orchestrator[golden-config]"
+```
+
 Once installed, the app needs to be enabled in your Nautobot configuration. The following block of code below shows the additional configuration required to be added to your `nautobot_config.py` file:
 
 - Append `"containerlab_orchestrator"` to the `PLUGINS` list.
@@ -51,6 +58,13 @@ PLUGINS_CONFIG = {
         "stub_node_image": "alpine:latest",
     }
 }
+```
+
+With the `golden-config` extra, also add `"nautobot_plugin_nornir"` and `"nautobot_golden_config"` to the `PLUGINS`
+list. Golden Config needs the Nornir app:
+
+```python
+PLUGINS = ["containerlab_orchestrator", "nautobot_plugin_nornir", "nautobot_golden_config"]
 ```
 
 Once the Nautobot configuration is updated, run the Post Upgrade command (`nautobot-server post_upgrade`) to run migrations and clear any cache:

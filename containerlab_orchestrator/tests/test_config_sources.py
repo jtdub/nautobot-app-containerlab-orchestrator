@@ -1,9 +1,13 @@
 """Tests for the startup config sources and the startup config keys of the topology builder."""
 
+import ast
+from pathlib import Path
 from unittest import mock
 
 import yaml
 from celery.exceptions import SoftTimeLimitExceeded
+from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connection
 from nautobot.apps.testing import TestCase
 from nautobot.apps.utils import render_jinja2
@@ -12,11 +16,16 @@ from nautobot.dcim.models import Device
 from containerlab_orchestrator import config_sources, topology
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
 from containerlab_orchestrator.config_sources import (
+    GOLDEN_CONFIG_APP,
+    SHORT_FORMS,
     W_EMPTY_CONFIG,
+    W_GOLDEN_CONFIG_NOT_INSTALLED,
+    W_NO_GOLDEN_CONFIG,
     W_NO_TEMPLATE,
-    W_SOURCE_NOT_AVAILABLE,
+    W_RENAME_FALLBACK,
     W_TEMPLATE_ERROR,
     W_UNKNOWN_SOURCE,
+    rename_interfaces,
     source_of,
 )
 from containerlab_orchestrator.mapper import DefaultMapping
@@ -89,6 +98,86 @@ class ContainerlabTextTestCase(TestCase):
             with self.subTest(text=text):
                 self.assertEqual(containerlab_text(text, "linux"), f"{text}\n")
         self.assertEqual(containerlab_text("hostname r1\n", "linux"), "hostname r1\n")
+
+
+APP_DIR = Path(config_sources.__file__).resolve().parent
+"""The directory of the app package."""
+
+INTENDED = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED
+"""The Golden Config intended config source."""
+
+BACKUP = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP
+"""The Golden Config backup config source."""
+
+GOLDEN_CONFIG_TEXT = "interface GigabitEthernet0/1\n description to Gi0/2\ninterface Gi0/10\n"
+"""A Golden Config text with the names of the Arista interface table."""
+
+RENAMED_TEXT = "interface eth1\n description to eth2\ninterface eth10\n"
+"""The Golden Config text after the rename with the Arista interface table."""
+
+
+class RenameInterfacesTestCase(TestCase):
+    """Test the rename of the physical interface names in a Golden Config text."""
+
+    def test_rename_changes_full_and_short_name(self):
+        text = "interface GigabitEthernet0/0/1\n description to Gi0/0/1\n"
+        renamed = rename_interfaces(text, {"GigabitEthernet0/0/1": "eth1"})
+        self.assertEqual(renamed, "interface eth1\n description to eth1\n")
+
+    def test_rename_leaves_longer_number_unchanged(self):
+        text = "interface GigabitEthernet0/0/10\ninterface Gi0/0/10\n"
+        self.assertEqual(rename_interfaces(text, {"GigabitEthernet0/0/1": "eth1"}), text)
+
+    def test_rename_ignores_names_inside_longer_names(self):
+        text = "Ethernet1/1 TenGigabitEthernet0/0/1 xEthernet1 Ethernet1_a Et1/1 Gi0/0/1/2"
+        self.assertEqual(rename_interfaces(text, {"Ethernet1": "eth1", "GigabitEthernet0/0/1": "eth2"}), text)
+        for text, rename_map in (("2/1/1/1", {"1/1/1": "e1"}), ("xe-0/0/0:1", {"xe-0/0/0": "eth1"})):
+            with self.subTest(text=text):
+                self.assertEqual(rename_interfaces(text, rename_map), text)
+
+    def test_rename_changes_only_the_first_name_of_a_range(self):
+        rename_map = {"GigabitEthernet0/1": "eth1", "GigabitEthernet0/4": "eth4"}
+        renamed = rename_interfaces("interface range Gi0/1-Gi0/4\n", rename_map)
+        self.assertEqual(renamed, "interface range eth1-Gi0/4\n")
+
+    def test_rename_handles_each_short_form(self):
+        for prefix, short in SHORT_FORMS.items():
+            with self.subTest(prefix=prefix):
+                renamed = rename_interfaces(f"{prefix}1/1 {short}1/1", {f"{prefix}1/1": "eth1"})
+                self.assertEqual(renamed, "eth1 eth1")
+        self.assertEqual(len(SHORT_FORMS), 8)
+        self.assertEqual(set(SHORT_FORMS.values()), {"Gi", "Te", "Fa", "Et", "Hu", "Po"})
+
+    def test_rename_runs_one_pass_longest_first(self):
+        swapped = rename_interfaces("Ethernet1 Ethernet2 Et1", {"Ethernet1": "Ethernet2", "Ethernet2": "Ethernet1"})
+        self.assertEqual(swapped, "Ethernet2 Ethernet1 Ethernet2")
+        rename_map = {"GigabitEthernet0/1": "eth1", "GigabitEthernet0/1.100": "eth5"}
+        renamed = rename_interfaces("GigabitEthernet0/1.100 Gi0/1.100 GigabitEthernet0/1.200", rename_map)
+        self.assertEqual(renamed, "eth5 eth5 eth1.200")
+
+    def test_rename_full_name_wins_and_shared_short_form_is_dropped(self):
+        text = "Te0/1 TenGigE0/1 TenGigabitEthernet0/1 Gi1 GigabitEthernet1"
+        expected = "Te0/1 eth2 eth1 eth3 eth4"
+        pairs = [
+            ("TenGigabitEthernet0/1", "eth1"),
+            ("TenGigE0/1", "eth2"),
+            ("Gi1", "eth3"),
+            ("GigabitEthernet1", "eth4"),
+        ]
+        for rename_map in (dict(pairs), dict(reversed(pairs))):
+            with self.subTest(order=list(rename_map)):
+                self.assertEqual(rename_interfaces(text, rename_map), expected)
+
+    def test_rename_changes_subinterface_parent(self):
+        renamed = rename_interfaces(
+            "interface Gi0/0/1.100\ninterface GigabitEthernet0/0/1.200\n", {"GigabitEthernet0/0/1": "e1"}
+        )
+        self.assertEqual(renamed, "interface e1.100\ninterface e1.200\n")
+
+    def test_rename_is_case_sensitive(self):
+        text = "gigabitethernet0/0/1 gi0/0/1 GI0/0/1"
+        self.assertEqual(rename_interfaces(text, {"GigabitEthernet0/0/1": "eth1"}), text)
+        self.assertEqual(rename_interfaces(text, {}), text)
 
 
 class StartupConfigTestCase(TopologyTestCase):
@@ -211,16 +300,6 @@ class StartupConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too
         self.assertNotIn("startup-config", nodes["arista1"])
         self.assertEqual(warnings, [W_EMPTY_CONFIG.format(device="arista1", source="Jinja2 template")])
 
-    def test_golden_config_source_warns_in_c1(self):
-        for source, label in (
-            (NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED, "Golden Config intended"),
-            (NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP, "Golden Config backup"),
-        ):
-            with self.subTest(source=source):
-                nodes, warnings = self.nodes_and_warnings([self.leaf1], source)
-                self.assertNotIn("startup-config", nodes["leaf1"])
-                self.assertEqual(warnings, [W_SOURCE_NOT_AVAILABLE.format(device="leaf1", source=label)])
-
     def test_unknown_source_warns(self):
         self.set_arista_config("hostname {{ device.name }}", "golden")
         nodes, warnings = self.nodes_and_warnings([self.arista1])
@@ -322,3 +401,96 @@ class StartupConfigBuildTestCase(StartupConfigTestCase):  # pylint: disable=too-
         self.assertIn("name: lab-a\n", text)
         self.assertEqual(yaml.safe_load(text), built)
         self.assertNotIn("|", yaml.safe_dump({"a": "x\ny\n"}))
+
+
+class GoldenConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too-many-ancestors
+    """Test the Golden Config intended and backup sources of the startup config."""
+
+    @staticmethod
+    def add_golden_config(device, intended="", backup=""):
+        """Return a saved Golden Config record of the device with the intended and backup texts."""
+        golden_config = apps.get_model(GOLDEN_CONFIG_APP, "GoldenConfig")
+        return golden_config.objects.create(device=device, intended_config=intended, backup_config=backup)
+
+    def arista_config(self, source, user=None):
+        """Return the arista1 node and the warnings of a build with the Golden Config source on the Arista mapping."""
+        self.set_arista_config(source=source)
+        built, warnings, _ = build_topology(new_lab(), [self.arista1], user)
+        return built["topology"]["nodes"]["arista1"], warnings
+
+    def test_rename_keeps_fallback_names_with_warning(self):
+        self.add_golden_config(self.arista1, intended="interface Ethernet5\ninterface GigabitEthernet0/1\n")
+        self.connect(self.add_interfaces(self.arista1, "Ethernet5")[0], self.add_interfaces(self.leaf1, "eth9")[0])
+        node, warnings = self.arista_config(INTENDED)
+        self.assertEqual(node["startup-config"], "interface Ethernet5\ninterface eth1\n")
+        self.assertIn(W_RENAME_FALLBACK.format(device="arista1", interface="Ethernet5"), warnings)
+
+    def test_intended_source_reads_and_renames(self):
+        self.add_golden_config(self.arista1, intended=GOLDEN_CONFIG_TEXT, backup="hostname backup\n")
+        node, warnings = self.arista_config(INTENDED)
+        self.assertEqual((node["startup-config"], node["enforce-startup-config"]), (RENAMED_TEXT, True))
+        self.assertEqual(warnings, [])
+
+    def test_backup_source_reads_and_renames(self):
+        self.add_golden_config(
+            self.arista1, intended="hostname intended\n", backup=f"secret $9$x\n{GOLDEN_CONFIG_TEXT}"
+        )
+        node, warnings = self.arista_config(BACKUP)
+        self.assertEqual(node["startup-config"], f"secret $$$$9$$$$x\n{RENAMED_TEXT}")
+        self.assertEqual(warnings, [])
+
+    def test_no_record_warns_and_gives_no_config(self):
+        for source in (INTENDED, BACKUP):
+            with self.subTest(source=source):
+                node, warnings = self.arista_config(source)
+                self.assertNotIn("startup-config", node)
+                self.assertEqual(warnings, [W_NO_GOLDEN_CONFIG.format(device="arista1")])
+
+    def test_hidden_record_warns_like_no_record(self):
+        self.add_golden_config(self.arista1, intended=GOLDEN_CONFIG_TEXT)
+        self.add_permissions("dcim.view_device")
+        node, warnings = self.arista_config(INTENDED, self.user)
+        self.assertNotIn("startup-config", node)
+        self.assertEqual(warnings, [W_NO_GOLDEN_CONFIG.format(device="arista1")])
+        self.add_permissions("nautobot_golden_config.view_goldenconfig")
+        node, _ = self.arista_config(INTENDED, get_user_model().objects.get(pk=self.user.pk))
+        self.assertEqual(node["startup-config"], RENAMED_TEXT)
+
+    def test_empty_golden_config_text_warns(self):
+        record = self.add_golden_config(self.arista1)
+        for text in ("", "  \n"):
+            record.intended_config = text
+            record.save()
+            with self.subTest(text=text):
+                node, warnings = self.arista_config(INTENDED)
+                self.assertNotIn("startup-config", node)
+                self.assertEqual(warnings, [W_EMPTY_CONFIG.format(device="arista1", source="Golden Config intended")])
+
+    def test_golden_config_installed_reads_the_app_registry(self):
+        self.assertTrue(config_sources.golden_config_installed())
+        with mock.patch.dict(apps.app_configs):
+            del apps.app_configs[GOLDEN_CONFIG_APP]
+            self.assertFalse(config_sources.golden_config_installed())
+
+    def test_not_installed_build_warns(self):
+        self.add_golden_config(self.arista1, intended=GOLDEN_CONFIG_TEXT, backup=GOLDEN_CONFIG_TEXT)
+        with mock.patch.object(config_sources, "golden_config_installed", return_value=False):
+            for source, label in ((INTENDED, "Golden Config intended"), (BACKUP, "Golden Config backup")):
+                with self.subTest(source=source):
+                    node, warnings = self.arista_config(source)
+                    self.assertNotIn("startup-config", node)
+                    expected = W_GOLDEN_CONFIG_NOT_INSTALLED.format(device="arista1", source=label)
+                    self.assertEqual(warnings, [expected])
+
+    def test_no_module_imports_golden_config(self):
+        modules = [path for path in APP_DIR.rglob("*.py") if "tests" not in path.relative_to(APP_DIR).parts]
+        self.assertIn(APP_DIR / "config_sources.py", modules)
+        for path in modules:
+            imported = set()
+            for statement in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(statement, ast.Import):
+                    imported.update(alias.name for alias in statement.names)
+                elif isinstance(statement, ast.ImportFrom):
+                    imported.add(statement.module or "")
+            with self.subTest(path=path.name):
+                self.assertFalse({name for name in imported if name.split(".")[0] == GOLDEN_CONFIG_APP})
