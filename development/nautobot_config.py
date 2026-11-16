@@ -119,7 +119,7 @@ if not _TESTING:
 #
 
 # Enable installed Apps. Add the name of each App to the list.
-PLUGINS = ["containerlab_orchestrator"]
+PLUGINS = ["containerlab_orchestrator", "nautobot_plugin_nornir", "nautobot_golden_config"]
 
 PLUGINS_CONFIG = {
     "containerlab_orchestrator": {

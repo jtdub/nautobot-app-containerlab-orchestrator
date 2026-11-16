@@ -32,6 +32,7 @@ python = ">=3.11,<3.15"
 nautobot = ">=3.1.0,<4.0.0"
 # HTTP client for clab-api-server
 requests = ">=2.32,<3"
+nautobot-golden-config = {version = ">=3.1.0,<4.0.0", optional = true}
 
 [tool.poetry.group.dev.dependencies]
 coverage = "*"
@@ -69,6 +70,10 @@ mkdocs-glightbox = "~0.5.2"
 
 [tool.poetry.extras]
 all = [
+    "nautobot-golden-config",
+]
+golden-config = [
+    "nautobot-golden-config",
 ]
 
 [tool.pylint.main]
