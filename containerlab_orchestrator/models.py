@@ -5,7 +5,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import Lower
 from jinja2 import TemplateError, TemplateSyntaxError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
@@ -41,6 +41,9 @@ from containerlab_orchestrator.validators import (
     validate_string_map,
     validate_trimmed_name,
 )
+
+LAB_JOB_FIELDS = frozenset({"status", "topology_yaml", "built_at", "last_inspect"})
+"""The lab fields that only the jobs write."""
 
 
 def _saved_value(instance, field_name):
@@ -401,6 +404,27 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         for data in (change.object_data, change.object_data_v2):
             data.pop("topology_yaml", None)
         return change
+
+    def save(self, *args, job_fields=False, **kwargs):
+        """Save the lab, and keep the job fields of an existing row unless job_fields is True.
+
+        The save first loads the saved job fields into the lab, so the change log shows the values of the row. A call
+        with positional arguments or an explicit update_fields keeps the Django rule.
+
+        Raises:
+            Lab.DoesNotExist: If the row of an existing lab is gone.
+        """
+        if args or not self.present_in_database or job_fields or kwargs.get("update_fields") is not None:
+            super().save(*args, **kwargs)
+            return
+        kwargs["update_fields"] = [
+            field.name
+            for field in self._meta.concrete_fields
+            if not field.primary_key and field.name not in LAB_JOB_FIELDS
+        ]
+        with transaction.atomic():
+            self.refresh_from_db(fields=sorted(LAB_JOB_FIELDS), from_queryset=Lab.objects.select_for_update())
+            super().save(**kwargs)
 
     def clean(self):
         """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.

@@ -22,6 +22,11 @@
             ],
             "additionalProperties": false
         },
+        "max_lab_devices": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 100
+        },
         "request_timeout": {
             "type": "integer",
             "minimum": 1,

@@ -54,6 +54,7 @@ PLUGINS = ["containerlab_orchestrator"]
 PLUGINS_CONFIG = {
     "containerlab_orchestrator": {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+        "max_lab_devices": 100,
         "request_timeout": 300,
         "stub_node_image": "alpine:latest",
     }
@@ -90,5 +91,6 @@ Use these settings to control the app:
 | Key | Example | Default | Description |
 | --- | ------- | ------- | ----------- |
 | `default_node_mapping` | `{"kind": "nokia_srlinux", "image": "ghcr.io/nokia/srlinux:latest"}` | `{"kind": "linux", "image": "alpine:latest"}` | The containerlab node kind and image that the app uses when no NodeMapping matches a device. When you set this value, you must give both `kind` and `image`. |
+| `max_lab_devices` | `20` | `100` | The largest number of devices that a lab can select. A build of a lab that selects more devices fails. Stub nodes do not count. The value is an integer of 1 or more. |
 | `request_timeout` | `60` | `300` | The timeout in seconds of each call to a clab-api-server host. The value is an integer of 1 or more. |
 | `stub_node_image` | `"registry.local/alpine:3"` | `"alpine:latest"` | The image of the stub nodes. A stub node is a `linux` node that stands for a device outside the lab, at the far end of a cable. The value must have no space, no `$`, and no `{{`. |

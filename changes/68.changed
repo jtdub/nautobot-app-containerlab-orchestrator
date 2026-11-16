@@ -1,0 +1,1 @@
+Changed lab edits so that they do not change the status, the stored topology YAML, the build time, or the inspect data of a lab.
