@@ -6,6 +6,51 @@ This document describes common use-cases and scenarios for this App.
 
 ## Use-cases and common workflows
 
+### Build a lab
+
+The Build Lab Topology job builds the containerlab topology of a lab from Nautobot data. It stores the topology YAML,
+the build time, and one node row for each node on the lab.
+
+#### Turn on the job
+
+Nautobot adds the job turned off. An administrator does these steps one time:
+
+1. Open Jobs > Jobs, and edit the job "Build Lab Topology" in the group "Containerlab Orchestrator".
+2. Select "Enabled", and save the job.
+3. Give the `extras.run_job` permission on the job to each user who builds labs.
+
+#### Who can build a lab
+
+The job checks the job user in this order. The first check that fails stops the job, and the lab does not change.
+
+| Check | Message |
+|---|---|
+| The user can view the lab. | "You cannot build this lab." The message does not name the lab. |
+| The user is the owner of the lab, or a superuser. | "Only the owner of lab <lab> or a superuser can build it." |
+| The user has the change permission on the lab. | "You need the change permission on lab <lab> to build it." |
+
+A lab with no owner, for example after Nautobot deletes the owner account, can get a build from a superuser only.
+The build also uses the view permission of the job user on devices. If the user cannot view some selected devices,
+the build fails.
+
+#### What a build changes
+
+- A Planned, Built, or Destroyed lab gets the Built status. A Deployed or Failed lab keeps its status.
+- A node row matches a node by its name, with a case-sensitive match. A kept row keeps its state and container ID.
+- The build deletes each node row whose name is not in the new topology.
+- The setting `max_lab_devices` limits the number of selected devices. Stub nodes do not count.
+
+The build reads Nautobot data with no lock, and then writes the lab in one short transaction. If a save of the lab
+row occurs during the build, the build fails with "Lab <lab> changed during the build. Run the job again." A change
+to a device, a cable, a node mapping, or a config during the build does not make the build fail. Run the job again
+to get such a change into the topology YAML.
+
+#### The job log
+
+The job log shows one line at the warning level for each builder warning, for example a skipped cable or a node with
+no startup config. It shows one line at the failure level for each error, as `<field>: <message>` for a field error.
+A successful build ends with one summary line. The job result holds only the node, link, and warning counts.
+
 ### Startup configs
 
 The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
@@ -132,6 +177,12 @@ The startup config text is in the topology YAML of the lab. A Golden Config text
 The app leaves the topology YAML out of the change log, the webhook payloads, and the job hook payloads. Each user
 who can view the lab can see it in the REST API, GraphQL, export templates, and custom links. containerlab also
 writes a copy of the text to the disk of the containerlab host.
+
+#### Who can read the job log
+
+The job log of a build holds no topology YAML and no startup config text, with one exception. A warning for a
+config template that did not render holds the error text of the template. Each user with the view permission on job
+results and job log entries can read the job log.
 
 ## Screenshots
 
