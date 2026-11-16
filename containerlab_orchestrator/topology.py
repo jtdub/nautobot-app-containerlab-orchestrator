@@ -62,10 +62,8 @@ KIND_PASSES = {
 }
 """The passes of each kind on its startup config in containerlab v0.83.0, after the passes on the topology file.
 
-A pair holds the count of env and template passes, then the count of template passes alone. cisco_iol renders its
-partial config one time (iol.go:440-476). cisco_vios, arrcus_arcos, and 6wind_vsr copy the text (cisco-vios.go:148-178,
-arcos.go:84-86, 6wind_vsr.go:74-80). nokia_srsim runs the partial config and then the full config through
-SubstituteEnvsAndTemplate (sros/config.go:118, 314). Read the kind code again for a new containerlab version.
+A pair holds the count of env and template passes, then the count of template passes alone. Each row cites the
+containerlab v0.83.0 code in the plan of #15; read it again for a new containerlab version.
 """
 
 DEFAULT_KIND_PASSES = (1, 0)
@@ -294,7 +292,11 @@ def _apply_overrides(node, mapping, warnings, warned_pks):
 
 
 def _kind_passes(kind, text):
-    """Return the env and template passes, then the template passes alone, of the kind on the startup config text."""
+    """Return the env and template passes, then the template passes alone, of the kind on the startup config text.
+
+    containerlab makes the kind lowercase before it selects the kind code, so the match ignores case.
+    """
+    kind = kind.lower()
     if kind in SRL_KINDS and text.lstrip(" \t\r\n").startswith("{"):
         return SRL_JSON_PASSES
     return KIND_PASSES.get(kind, DEFAULT_KIND_PASSES)

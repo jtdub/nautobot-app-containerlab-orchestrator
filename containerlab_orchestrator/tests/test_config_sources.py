@@ -3,8 +3,10 @@
 from unittest import mock
 
 import yaml
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import DatabaseError, connection
-from django.test import SimpleTestCase
+from nautobot.apps.testing import TestCase
+from nautobot.apps.utils import render_jinja2
 from nautobot.dcim.models import Device
 
 from containerlab_orchestrator import config_sources, topology
@@ -54,7 +56,7 @@ def lab_with_source(source):
     return lab
 
 
-class ContainerlabTextTestCase(SimpleTestCase):
+class ContainerlabTextTestCase(TestCase):
     """Test the escape of a startup config for each kind group."""
 
     def test_containerlab_text_escapes_for_each_kind_group(self):
@@ -67,6 +69,7 @@ class ContainerlabTextTestCase(SimpleTestCase):
             ("nokia_srlinux", "$$$$", TWO_LAYERS),
             ("nokia_srsim", "$" * 8, THREE_LAYERS),
             ("nokia_sros", "$$$$", TWO_LAYERS),
+            ("NOKIA_SRSIM", "$" * 8, THREE_LAYERS),
         )
         for kind, dollar, brace in groups:
             for case, text in PROBE_CASES.items():
@@ -170,18 +173,37 @@ class StartupConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too
             config_source=NodeMappingConfigSourceChoices.JINJA2, config_template="hostname {{ device.name }}"
         )
         for template, error in (
-            ("{{ 1 // 0 }}", "integer division or modulo by zero"),
             ("{{ missing.name }}", "'missing' is undefined"),
             ("{% if %}", "Expected an expression, got 'end of statement block'"),
+            ("{{ device.name }}", "a template error of any type"),
         ):
             with self.subTest(template=template):
                 self.set_arista_config(template)
-                nodes, warnings = self.nodes_and_warnings([self.arista1, self.nokia1])
+                any_error = ValueError(error) if template == "{{ device.name }}" else None
+                with mock.patch.object(config_sources, "render_jinja2", side_effect=self.raise_for_arista(any_error)):
+                    nodes, warnings = self.nodes_and_warnings([self.arista1, self.nokia1])
                 self.assertNotIn("startup-config", nodes["arista1"])
                 self.assertEqual(nodes["nokia1"]["startup-config"], "hostname nokia1\n")
                 self.assertEqual(
                     warnings, [W_TEMPLATE_ERROR.format(device="arista1", mapping=self.arista_mapping, error=error)]
                 )
+
+    @staticmethod
+    def raise_for_arista(error):
+        """Return a render_jinja2 stand-in that raises the error for the arista1 template, else renders."""
+
+        def render(template_code, context):
+            if error is not None and context["device"].name == "arista1":
+                raise error
+            return render_jinja2(template_code, context)
+
+        return render
+
+    def test_soft_time_limit_stops_the_build(self):
+        self.set_arista_config("hostname {{ device.name }}")
+        with mock.patch.object(config_sources, "render_jinja2", side_effect=SoftTimeLimitExceeded()):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                build_topology(new_lab(), [self.arista1])
 
     def test_empty_template_output_warns(self):
         self.set_arista_config("{% if false %}x{% endif %} \n\t")

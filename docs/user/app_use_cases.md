@@ -8,8 +8,8 @@ This document describes common use-cases and scenarios for this App.
 
 ### Startup configs
 
-The topology builder can give each lab node a startup config from Nautobot data. The Build job writes the config
-into the stored topology YAML. Stub nodes get no startup config.
+The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
+config. The Build job (#16) will write it into the stored topology YAML. Stub nodes get no startup config.
 
 #### Config source
 
@@ -75,7 +75,7 @@ to the default config of the kind.
 #### Redeploy
 
 The builder writes `enforce-startup-config: true` on each node with a startup config. So a deploy of a new build
-writes the new config, and a change that you make in the running lab is lost on redeploy. There are two exceptions:
+writes the new config, and a redeploy removes a change that you make in the running lab. There are two exceptions:
 
 - A `cisco_iol` node keeps its NVRAM file when it exists, so it boots with its saved config.
 - A `nokia_sros` node applies the partial config only when the lab directory has no saved config.

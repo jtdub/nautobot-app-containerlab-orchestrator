@@ -1,5 +1,6 @@
 """Give the startup config text of a lab node from its config source."""
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.db import transaction
 from nautobot.apps.utils import render_jinja2
 
@@ -48,7 +49,8 @@ def _jinja2_text(device, mapping, interface_map, lab):
     """Return the rendered config template of the mapping and a warning, one of which is None.
 
     Template code can raise an exception of any type, so each one gives W_TEMPLATE_ERROR. The render runs in a
-    savepoint, so a database error in the template does not stop the rest of the build.
+    savepoint, so a database error in the template does not stop the rest of the build. The Celery soft time limit is
+    not caught, so the job stops.
     """
     if not mapping.config_template:
         return None, W_NO_TEMPLATE.format(device=device, mapping=mapping)
@@ -57,6 +59,8 @@ def _jinja2_text(device, mapping, interface_map, lab):
     try:
         with transaction.atomic():
             return render_jinja2(f"{prefix}{mapping.config_template}{suffix}", context), None
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as error:  # pylint: disable=broad-exception-caught
         return None, W_TEMPLATE_ERROR.format(device=device, mapping=mapping, error=error)
 
