@@ -332,7 +332,7 @@ def _collect_cables(devices, user, warnings):
     """Return a CablePair for each cable of the devices that the builder can link, in node order.
 
     Add one warning for each cable that it skips. A cable to an outside device that the user cannot view is
-    skipped before a rule reads its far end.
+    skipped before a rule reads the far interface.
 
     Returns:
         The pairs, and the local interfaces of the cables to the devices that the user cannot view.
@@ -371,7 +371,7 @@ def _link_names(mappings, pairs, hidden_locals, warnings):
     """Return the container name of each linked interface, from one map_interfaces call for each device.
 
     The interfaces of a device are the local ends of its pairs, the far ends of the internal pairs on it, and its
-    hidden_locals. So the container names do not depend on the permissions of the user.
+    hidden_locals. So a hidden cable keeps the container names of the other interfaces of the device.
 
     Args:
         mappings: The mapping of each device pk, in node order.

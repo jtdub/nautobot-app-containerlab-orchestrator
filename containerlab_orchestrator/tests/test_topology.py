@@ -719,6 +719,16 @@ class BuildTopologyStubsTestCase(TopologyTestCase):
             [["arista1:eth3", "stub-wan1:eth1"], ["arista1:eth4", "arista2:eth1"]],
         )
 
+    def test_viewable_far_device_gets_stub_and_hidden_check_runs_first(self):
+        self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
+        (hidden_local,) = self.add_interfaces(self.arista1, "GigabitEthernet0/2")
+        self.connect(hidden_local, self.add_interfaces(self.wan2, "GigabitEthernet0/1", mgmt_only=True)[0])
+        self.add_permissions("dcim.view_device", constraints={"name__in": ["arista1", "wan1"]})
+        built, warnings, node_devices = build_topology(new_lab(), [self.arista1], self.user)
+        self.assertEqual(list(node_devices), ["arista1", "stub-wan1"])
+        self.assertEqual(built["topology"]["links"], [{"endpoints": ["arista1:eth1", "stub-wan1:eth1"]}])
+        self.assertEqual(warnings, [self.cable_warning(hidden_local, topology.W_HIDDEN)])
+
     def test_far_device_with_all_links_skipped_gets_no_stub(self):
         local_marked, _ = self.cable_to_outside(self.arista1, "GigabitEthernet0/1", self.wan1, "GigabitEthernet0/1")
         (local_data,) = self.add_interfaces(self.arista1, "GigabitEthernet0/2")
