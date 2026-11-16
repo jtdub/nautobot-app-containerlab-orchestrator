@@ -25,6 +25,7 @@ from nautobot.apps.utils import validate_jinja2
 from nautobot.extras.models import DynamicGroup, SecretsGroup, SecretsGroupAssociation, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
+from containerlab_orchestrator.config_sources import validate_config_source
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 from containerlab_orchestrator.selection import NOT_DEVICE_GROUP_MESSAGE, validate_device_filter
 from containerlab_orchestrator.validators import (
@@ -40,6 +41,21 @@ from containerlab_orchestrator.validators import (
     validate_string_map,
     validate_trimmed_name,
 )
+
+
+def _saved_value(instance, field_name):
+    """Return the value of the field in the saved row of the instance, or None for a new row."""
+    return type(instance).objects.filter(pk=instance.pk).values_list(field_name, flat=True).first()
+
+
+def _changed_config_source_messages(instance):
+    """Return the errors of a config source that is not available and that differs from the saved value."""
+    try:
+        validate_config_source(instance.config_source)
+    except ValidationError as error:
+        if instance.config_source != _saved_value(instance, "config_source"):
+            return error.messages
+    return []
 
 
 @extras_features("custom_links", "custom_validators", "export_templates", "graphql", "webhooks")
@@ -201,6 +217,7 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
 
         The database constraint rejects only both targets, because a MySQL cascade delete first sets a target to NULL.
         The JSON checks are here and not on the fields, because Django skips field validators for an empty value.
+        A Golden Config source that is not available fails only when it is new or changed.
         """
         super().clean()
         errors = {}
@@ -211,6 +228,9 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
                 validator(getattr(self, field_name))
             except ValidationError as error:
                 errors[field_name] = error.messages
+        source_messages = _changed_config_source_messages(self)
+        if source_messages:
+            errors["config_source"] = source_messages
         if self.config_source == NodeMappingConfigSourceChoices.JINJA2 and not self.config_template:
             errors["config_template"] = ["Enter a template when the config source is Jinja2."]
         if self.config_template:
@@ -385,7 +405,8 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
     def clean(self):
         """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.
 
-        The name check ignores case. The subnet check counts the saved node rows only.
+        The name check ignores case. The subnet check counts the saved node rows only. A Golden Config source that is
+        not available fails only when it is new or changed.
         """
         super().clean()
         errors = {}
@@ -414,6 +435,9 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         subnet_message = self._subnet_room_message()
         if subnet_message:
             errors["mgmt_subnet"] = [subnet_message]
+        source_messages = _changed_config_source_messages(self)
+        if source_messages:
+            errors["config_source"] = source_messages
         if errors:
             raise ValidationError(errors)
 
@@ -429,7 +453,7 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
 
     def _saved_device_filter(self):
         """Return the device filter of the saved row of this lab."""
-        return Lab.objects.filter(pk=self.pk).values_list("device_filter", flat=True).first()
+        return _saved_value(self, "device_filter")
 
     def _subnet_room_message(self):
         """Return an error when the saved node rows do not fit in a valid subnet, else an empty string."""
