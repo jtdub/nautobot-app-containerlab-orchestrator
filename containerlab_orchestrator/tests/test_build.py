@@ -37,7 +37,7 @@ from containerlab_orchestrator.validators import subnet_node_room
 
 
 class BuildLabTestCase(TopologyTestCase):
-    """Test build_lab on a lab that selects arista1 and leaf1."""
+    """Base class with a lab that selects arista1 and leaf1, for the build_lab tests."""
 
     @classmethod
     def setUpTestData(cls):
@@ -72,6 +72,10 @@ class BuildLabTestCase(TopologyTestCase):
     def _rows(self):
         """Return the node rows of the lab by node name."""
         return {row.node_name: row for row in LabNode.objects.filter(lab=self.lab)}
+
+
+class BuildLabResultTestCase(BuildLabTestCase):
+    """Test the YAML, the status, the node rows, and the warnings that build_lab stores and returns."""
 
     def test_build_stores_yaml_built_at_and_status(self):
         before = timezone.now()
@@ -142,6 +146,10 @@ class BuildLabTestCase(TopologyTestCase):
         self.assertEqual(
             result.warnings, [CABLE_WARNING.format(device=self.arista1, interface=mgmt.name, text=W_MGMT_ONLY)]
         )
+
+
+class BuildLabChecksTestCase(BuildLabTestCase):
+    """Test the device limit, the user limit, the failures, and the rollback of build_lab."""
 
     def test_too_many_devices_fails_before_build(self):
         with override_settings(PLUGINS_CONFIG={APP_NAME: {**DEFAULT_SETTINGS, "max_lab_devices": 1}}):
