@@ -26,7 +26,19 @@ from nautobot.dcim.models import Device, DeviceType, Platform
 from nautobot.extras.models import DynamicGroup, SecretsGroup
 
 from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
+from containerlab_orchestrator.config_sources import GOLDEN_CONFIG_FIELDS, config_source_choices, source_label
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
+
+
+def config_source_form_choices(current=None, blank=True):
+    """Return the config source choices of an edit form.
+
+    A saved Golden Config source that is not a choice stays as one extra choice, so the form does not change it.
+    """
+    choices = config_source_choices()
+    if current in GOLDEN_CONFIG_FIELDS and current not in dict(choices):
+        choices = (*choices, (current, f"{source_label(current)} (Golden Config not installed)"))
+    return add_blank_choice(choices) if blank else choices
 
 
 class ContainerlabHostForm(NautobotModelForm):  # pylint: disable=too-many-ancestors
@@ -89,12 +101,23 @@ class NodeMappingForm(NautobotModelForm):  # pylint: disable=too-many-ancestors
         help_text=NodeMapping._meta.get_field("env").help_text,
     )
     overrides = JSONField(required=False, help_text=NodeMapping._meta.get_field("overrides").help_text)
+    config_source = forms.ChoiceField(
+        required=False,
+        widget=StaticSelect2(),
+        label="Config source",
+        help_text=NodeMapping._meta.get_field("config_source").help_text,
+    )
 
     class Meta:
         """Meta attributes for NodeMappingForm."""
 
         model = NodeMapping
         fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        """Set the config source choices for the saved value of the mapping."""
+        super().__init__(*args, **kwargs)
+        self.fields["config_source"].choices = config_source_form_choices(self.instance.config_source)
 
     def clean_env(self):
         """Return an empty object when the env field is empty."""
@@ -143,7 +166,7 @@ class NodeMappingBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # p
     memory = forms.CharField(required=False, max_length=32, label="Memory")
     config_source = forms.ChoiceField(
         required=False,
-        choices=add_blank_choice(NodeMappingConfigSourceChoices),
+        choices=config_source_form_choices,
         widget=StaticSelect2(),
         label="Config source",
     )
@@ -192,11 +215,11 @@ def _device_dynamic_group_field():
     )
 
 
-def _lab_config_source_field():
+def _lab_config_source_field(choices=add_blank_choice(NodeMappingConfigSourceChoices)):
     """Return an optional choice field of the default config sources of a lab."""
     return forms.ChoiceField(
         required=False,
-        choices=add_blank_choice(NodeMappingConfigSourceChoices),
+        choices=choices,
         widget=StaticSelect2(),
         label="Default config source",
     )
@@ -213,12 +236,22 @@ class LabForm(NautobotModelForm):  # pylint: disable=too-many-ancestors
         label="Device filter",
         help_text=Lab._meta.get_field("device_filter").help_text,
     )
+    config_source = forms.ChoiceField(
+        widget=StaticSelect2(),
+        label="Default config source",
+        help_text=Lab._meta.get_field("config_source").help_text,
+    )
 
     class Meta:
         """Meta attributes for LabForm."""
 
         model = Lab
         fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        """Set the config source choices for the saved value of the lab."""
+        super().__init__(*args, **kwargs)
+        self.fields["config_source"].choices = config_source_form_choices(self.instance.config_source, blank=False)
 
     def clean_device_filter(self):
         """Return an empty object when the device filter field is empty."""
@@ -230,7 +263,7 @@ class LabBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # pylint: d
 
     pk = forms.ModelMultipleChoiceField(queryset=Lab.objects.all(), widget=forms.MultipleHiddenInput)
     host = DynamicModelChoiceField(queryset=ContainerlabHost.objects.all(), required=False, label="Host")
-    config_source = _lab_config_source_field()
+    config_source = _lab_config_source_field(config_source_form_choices)
     dynamic_group = _device_dynamic_group_field()
 
     class Meta:
