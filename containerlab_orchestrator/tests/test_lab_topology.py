@@ -14,7 +14,9 @@ from containerlab_orchestrator.views import LARGE_YAML_TEXT, NO_BUILD_TEXT, TAB_
 TOPOLOGY_URL_NAME = "plugins-api:containerlab_orchestrator-api:lab-topology"
 LAB_LIST_URL_NAME = "plugins:containerlab_orchestrator:lab_list"
 STORED_YAML = "name: lab-a\ntopology:\n  nodes:\n    leaf1:\n      kind: ceos\n      image: ceos:4.32.0F\n"
-SCRIPT_YAML = "name: lab-a\ntopology:\n  nodes:\n    leaf1:\n      startup-config: |\n        <script>alert(1)</script>\n"
+SCRIPT_YAML = (
+    "name: lab-a\ntopology:\n  nodes:\n    leaf1:\n      startup-config: |\n        <script>alert(1)</script>\n"
+)
 
 
 def topology_url(lab):
@@ -27,7 +29,7 @@ def store_yaml(lab, text):
     Lab.objects.filter(pk=lab.pk).update(topology_yaml=text)
 
 
-class LabTopologyAPITestCase(APITestCase):
+class LabTopologyAPITestCase(APITestCase):  # pylint: disable=too-many-ancestors
     """Test the topology YAML download endpoint and the lab serializer."""
 
     model = Lab
