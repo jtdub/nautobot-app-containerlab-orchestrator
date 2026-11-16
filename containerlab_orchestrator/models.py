@@ -5,7 +5,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import Lower
 from jinja2 import TemplateError, TemplateSyntaxError
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices
@@ -405,18 +405,26 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
             data.pop("topology_yaml", None)
         return change
 
-    def save(self, *args, job_fields=False, **kwargs):
-        """Save the lab. On an existing row, do not write the job fields unless job_fields is True.
+    def save(self, *, job_fields=False, **kwargs):
+        """Save the lab, and keep the job fields of an existing row unless job_fields is True.
 
-        An edit then cannot write old job field values over the values of a job. An explicit update_fields stays.
+        The save first loads the saved job fields into the lab, so the change log shows the values of the row. An
+        explicit update_fields overrides this rule.
+
+        Raises:
+            Lab.DoesNotExist: If the row of an existing lab is gone.
         """
-        if self.present_in_database and not job_fields and kwargs.get("update_fields") is None:
-            kwargs["update_fields"] = [
-                field.name
-                for field in self._meta.concrete_fields
-                if not field.primary_key and field.name not in LAB_JOB_FIELDS
-            ]
-        super().save(*args, **kwargs)
+        if not self.present_in_database or job_fields or kwargs.get("update_fields") is not None:
+            super().save(**kwargs)
+            return
+        kwargs["update_fields"] = [
+            field.name
+            for field in self._meta.concrete_fields
+            if not field.primary_key and field.name not in LAB_JOB_FIELDS
+        ]
+        with transaction.atomic():
+            self.refresh_from_db(fields=sorted(LAB_JOB_FIELDS), from_queryset=Lab.objects.select_for_update())
+            super().save(**kwargs)
 
     def clean(self):
         """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.

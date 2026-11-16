@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from nautobot.apps.change_logging import web_request_context
 from nautobot.apps.choices import ObjectChangeActionChoices
 from nautobot.apps.testing import TestCase
@@ -49,12 +50,25 @@ class LabJobFieldsTestCase(TestCase):
         with web_request_context(self.user):
             stale.validated_save()
 
-        self._assert_build_fields(stale)
-        self.assertEqual(stale.mgmt_subnet, "172.20.30.0/24")
-        self.assertGreater(stale.last_updated, last_updated)
+        self.assertEqual(stale.status, self.built)
+        self.assertEqual(stale.built_at, self.built_at)
         change = ObjectChange.objects.filter(changed_object_id=stale.pk).latest("time")
         self.assertEqual(change.action, ObjectChangeActionChoices.ACTION_UPDATE)
         self.assertEqual(change.object_data_v2["mgmt_subnet"], "172.20.30.0/24")
+        self.assertEqual(change.object_data_v2["status"]["id"], str(self.built.pk))
+        self.assertEqual(parse_datetime(change.object_data_v2["built_at"]), self.built_at)
+        self._assert_build_fields(stale)
+        self.assertEqual(stale.mgmt_subnet, "172.20.30.0/24")
+        self.assertGreater(stale.last_updated, last_updated)
+
+    def test_edit_save_of_deleted_row_fails(self):
+        stale = Lab.objects.get(pk=self.labs[0].pk)
+        Lab.objects.filter(pk=stale.pk).delete()
+
+        stale.mgmt_subnet = "172.20.30.0/24"
+        with self.assertRaises(Lab.DoesNotExist):
+            stale.save()
+        self.assertFalse(Lab.objects.filter(pk=stale.pk).exists())
 
     def test_job_fields_save_writes_job_fields(self):
         lab = Lab.objects.get(pk=self.labs[0].pk)
