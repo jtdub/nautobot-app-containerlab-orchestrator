@@ -74,7 +74,7 @@ class BuildLabTestCase(TopologyTestCase):
         return {row.node_name: row for row in LabNode.objects.filter(lab=self.lab)}
 
 
-class BuildLabResultTestCase(BuildLabTestCase):
+class BuildLabResultTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestors
     """Test the YAML, the status, the node rows, and the warnings that build_lab stores and returns."""
 
     def test_build_stores_yaml_built_at_and_status(self):
@@ -148,7 +148,7 @@ class BuildLabResultTestCase(BuildLabTestCase):
         )
 
 
-class BuildLabChecksTestCase(BuildLabTestCase):
+class BuildLabChecksTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestors
     """Test the device limit, the user limit, the failures, and the rollback of build_lab."""
 
     def test_too_many_devices_fails_before_build(self):
