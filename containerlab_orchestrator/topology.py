@@ -58,8 +58,6 @@ KIND_PASSES = {
     "cisco_vios": (0, 0),
     "arrcus_arcos": (0, 0),
     "6wind_vsr": (0, 0),
-    "nokia_srlinux": (1, 0),
-    "srl": (1, 0),
     "nokia_srsim": (2, 0),
 }
 """The passes of each kind on its startup config in containerlab v0.83.0, after the passes on the topology file.
@@ -74,7 +72,8 @@ DEFAULT_KIND_PASSES = (1, 0)
 """The passes of each other kind: GenerateConfig runs SubstituteEnvsAndTemplate one time (default_node.go:660-695)."""
 
 SRL_KINDS = frozenset({"nokia_srlinux", "srl"})
-"""The SR Linux kind names. SR Linux renders a JSON config one more time (srl.go:733-781)."""
+"""The SR Linux kind names. They use DEFAULT_KIND_PASSES for a CLI config, and render a JSON config one more time
+(srl.go:733-781)."""
 
 SRL_JSON_PASSES = (2, 0)
 """The passes of an SR Linux startup config whose first character that is not blank is {."""

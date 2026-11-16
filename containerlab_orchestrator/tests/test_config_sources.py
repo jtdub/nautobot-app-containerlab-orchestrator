@@ -20,7 +20,7 @@ from containerlab_orchestrator.config_sources import (
 from containerlab_orchestrator.mapper import DefaultMapping
 from containerlab_orchestrator.models import NodeMapping
 from containerlab_orchestrator.tests.test_topology import TopologyTestCase, load_clab_schema, new_lab
-from containerlab_orchestrator.topology import W_OVERRIDE, build_topology, to_yaml
+from containerlab_orchestrator.topology import SRL_KINDS, W_OVERRIDE, build_topology, to_yaml
 
 ONE_LAYER = "{{`{{`}}"
 """The escape of {{ for one template pass."""
@@ -42,9 +42,6 @@ PROBE_CASES = {
 
 SRL_JSON_TEXT = ' \n{"system": {"banner": "${HOME} {{ x }}"}}\n'
 """An SR Linux JSON config, which containerlab reads with one more env and template pass."""
-
-SRL_KINDS = ("srl", "nokia_srlinux")
-"""The SR Linux kind names. A text that starts with { is a JSON config for them, so the case n7 is JSON."""
 
 
 containerlab_text = topology._containerlab_text  # pylint: disable=protected-access
@@ -91,12 +88,16 @@ class ContainerlabTextTestCase(SimpleTestCase):
         self.assertEqual(containerlab_text("hostname r1\n", "linux"), "hostname r1\n")
 
 
-class StartupConfigSourceTestCase(TopologyTestCase):
-    """Test the source order and the Jinja2 source of the startup config."""
+class StartupConfigTestCase(TopologyTestCase):
+    """Base class with the helper that sets the startup config fields of the Arista mapping."""
 
-    def set_arista_config(self, source, template=""):
-        """Set the config source and the config template of the Arista mapping row."""
+    def set_arista_config(self, template="", source=NodeMappingConfigSourceChoices.JINJA2):
+        """Set the config template and the config source of the Arista mapping row."""
         NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(config_source=source, config_template=template)
+
+
+class StartupConfigSourceTestCase(StartupConfigTestCase):
+    """Test the source order and the Jinja2 source of the startup config."""
 
     def nodes_and_warnings(self, devices, source=NodeMappingConfigSourceChoices.NONE, user=None):
         """Return the nodes and the warnings of a topology of the devices with the lab default source."""
@@ -104,17 +105,17 @@ class StartupConfigSourceTestCase(TopologyTestCase):
         return built["topology"]["nodes"], warnings
 
     def test_mapping_source_wins_over_lab_source(self):
-        self.set_arista_config(NodeMappingConfigSourceChoices.JINJA2, "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}")
         nodes, warnings = self.nodes_and_warnings([self.arista1])
         self.assertEqual(nodes["arista1"]["startup-config"], "hostname arista1\n")
         self.assertEqual(warnings, [])
-        self.set_arista_config(NodeMappingConfigSourceChoices.NONE, "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}", NodeMappingConfigSourceChoices.NONE)
         nodes, warnings = self.nodes_and_warnings([self.arista1], NodeMappingConfigSourceChoices.JINJA2)
         self.assertNotIn("startup-config", nodes["arista1"])
         self.assertEqual(warnings, [])
 
     def test_empty_mapping_source_uses_lab_source(self):
-        self.set_arista_config("", "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}", "")
         nodes, _ = self.nodes_and_warnings([self.arista1], NodeMappingConfigSourceChoices.JINJA2)
         self.assertEqual(nodes["arista1"]["startup-config"], "hostname arista1\n")
         default_mapping = DefaultMapping(kind="linux", image="alpine:latest")
@@ -130,7 +131,7 @@ class StartupConfigSourceTestCase(TopologyTestCase):
         self.assertEqual(warnings, [])
 
     def test_none_source_gives_no_startup_config_keys(self):
-        self.set_arista_config(NodeMappingConfigSourceChoices.NONE, "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}", NodeMappingConfigSourceChoices.NONE)
         nodes, warnings = self.nodes_and_warnings([self.arista1, self.leaf1, self.nokia1])
         for node in nodes.values():
             self.assertNotIn("startup-config", node)
@@ -139,7 +140,6 @@ class StartupConfigSourceTestCase(TopologyTestCase):
 
     def test_jinja2_source_renders_device_lab_and_interface_map(self):
         self.set_arista_config(
-            NodeMappingConfigSourceChoices.JINJA2,
             "hostname {{ device.name }}\nlab {{ lab.name }}\nserial {{ device.serial }}\n"
             "{% for name, container in interface_map|dictsort %}{{ name }}={{ container }}\n{% endfor %}",
         )
@@ -153,7 +153,7 @@ class StartupConfigSourceTestCase(TopologyTestCase):
         self.assertEqual(warnings, [])
 
     def test_jinja2_without_template_warns_and_gives_no_config(self):
-        self.set_arista_config(NodeMappingConfigSourceChoices.JINJA2)
+        self.set_arista_config()
         nodes, warnings = self.nodes_and_warnings([self.arista1, self.leaf1], NodeMappingConfigSourceChoices.JINJA2)
         self.assertNotIn("startup-config", nodes["arista1"])
         self.assertNotIn("startup-config", nodes["leaf1"])
@@ -175,7 +175,7 @@ class StartupConfigSourceTestCase(TopologyTestCase):
             ("{% if %}", "Expected an expression, got 'end of statement block'"),
         ):
             with self.subTest(template=template):
-                self.set_arista_config(NodeMappingConfigSourceChoices.JINJA2, template)
+                self.set_arista_config(template)
                 nodes, warnings = self.nodes_and_warnings([self.arista1, self.nokia1])
                 self.assertNotIn("startup-config", nodes["arista1"])
                 self.assertEqual(nodes["nokia1"]["startup-config"], "hostname nokia1\n")
@@ -184,7 +184,7 @@ class StartupConfigSourceTestCase(TopologyTestCase):
                 )
 
     def test_empty_template_output_warns(self):
-        self.set_arista_config(NodeMappingConfigSourceChoices.JINJA2, "{% if false %}x{% endif %} \n\t")
+        self.set_arista_config("{% if false %}x{% endif %} \n\t")
         nodes, warnings = self.nodes_and_warnings([self.arista1])
         self.assertNotIn("startup-config", nodes["arista1"])
         self.assertEqual(warnings, [W_EMPTY_CONFIG.format(device="arista1", source="Jinja2 template")])
@@ -200,13 +200,13 @@ class StartupConfigSourceTestCase(TopologyTestCase):
                 self.assertEqual(warnings, [W_SOURCE_NOT_AVAILABLE.format(device="leaf1", source=label)])
 
     def test_unknown_source_warns(self):
-        self.set_arista_config("golden", "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}", "golden")
         nodes, warnings = self.nodes_and_warnings([self.arista1])
         self.assertNotIn("startup-config", nodes["arista1"])
         self.assertEqual(warnings, [W_UNKNOWN_SOURCE.format(device="arista1", source="golden")])
 
     def test_template_database_error_rolls_back_its_savepoint(self):
-        self.set_arista_config(NodeMappingConfigSourceChoices.JINJA2, "hostname {{ device.name }}")
+        self.set_arista_config("hostname {{ device.name }}")
 
         def broken_query(*_args):
             with connection.cursor() as cursor:
@@ -225,12 +225,8 @@ class StartupConfigSourceTestCase(TopologyTestCase):
         )
 
 
-class StartupConfigBuildTestCase(TopologyTestCase):
+class StartupConfigBuildTestCase(StartupConfigTestCase):
     """Test the startup config keys that build_topology writes on the nodes."""
-
-    def set_arista_config(self, template, source=NodeMappingConfigSourceChoices.JINJA2):
-        """Set the Jinja2 config template of the Arista mapping row."""
-        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(config_source=source, config_template=template)
 
     def test_build_escapes_jinja2_output_and_keeps_it(self):
         self.set_arista_config("enable secret 9 $9$abc\nbanner {{ '{{' }} x")
