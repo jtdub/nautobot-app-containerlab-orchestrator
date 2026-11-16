@@ -53,7 +53,7 @@ class BuildLabTopology(Job):
 
     lab = ObjectVar(model=Lab, description="The lab to build.")
 
-    class Meta:
+    class Meta:  # pylint: disable=too-few-public-methods
         """Job metadata."""
 
         name = "Build Lab Topology"
