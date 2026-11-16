@@ -52,6 +52,14 @@ The Golden Config sources need the `golden-config` extra and the apps `nautobot_
 `nautobot_golden_config` in `PLUGINS` (see the install guide). If Golden Config is not installed, a node with a
 Golden Config source gets a warning and no startup config.
 
+If Golden Config is not installed, the node mapping and lab forms do not show the Golden Config sources, and the
+REST API rejects a new Golden Config source. A record that already has a Golden Config source keeps it:
+
+- The edit form shows the source as "Golden Config intended (Golden Config not installed)" or "Golden Config backup
+  (Golden Config not installed)". A save does not change it.
+- A save of another field passes in the forms, in a bulk edit, and in the REST API.
+- To stop the warning, select another source.
+
 The builder reads the Golden Config record of the device with the permissions of the build user. These cases give a
 warning and no startup config:
 
