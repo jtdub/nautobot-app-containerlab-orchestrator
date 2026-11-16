@@ -302,7 +302,12 @@ class GoldenConfigChoiceFormTestCase(TestCase):
         mapping_data = {"device_type": self.mapping.device_type.pk, "kind": "ceos", "image": "ceos:4.33.0F"}
         lab_data = {"name": "gc-lab-2", "host": self.host.pk, "mgmt_subnet": "192.168.60.0/24"}
         cases = (
-            (NodeMappingForm, self.mapping, mapping_data, (backup, "Golden Config backup (Golden Config not installed)")),
+            (
+                NodeMappingForm,
+                self.mapping,
+                mapping_data,
+                (backup, "Golden Config backup (Golden Config not installed)"),
+            ),
             (LabForm, lab, lab_data, (intended, "Golden Config intended (Golden Config not installed)")),
         )
         with mock.patch.object(config_sources, "golden_config_installed", return_value=False):

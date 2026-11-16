@@ -366,7 +366,9 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
 
         with mock.patch.object(config_sources, "golden_config_installed", return_value=False):
             errors = self._post_lab(status.HTTP_400_BAD_REQUEST, name="api-gc", config_source=intended)
-            response = self.client.patch(self._get_detail_url(saved_lab), {"name": "lab-gc"}, format="json", **self.header)
+            response = self.client.patch(
+                self._get_detail_url(saved_lab), {"name": "lab-gc"}, format="json", **self.header
+            )
 
         self.assertEqual(errors["config_source"], [GOLDEN_CONFIG_MESSAGE])
         self.assertHttpStatus(response, status.HTTP_200_OK)

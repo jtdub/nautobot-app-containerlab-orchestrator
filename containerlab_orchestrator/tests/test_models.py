@@ -646,7 +646,9 @@ class GoldenConfigNotInstalledCleanTestCase(LabValidationTestCase):  # pylint: d
         mapping.validated_save()
         lab.name = "lab-gc"
         lab.validated_save()
-        self.new_mapping(self.platforms[1], config_source=NodeMappingConfigSourceChoices.JINJA2, config_template="x").full_clean()
+        self.new_mapping(
+            self.platforms[1], config_source=NodeMappingConfigSourceChoices.JINJA2, config_template="x"
+        ).full_clean()
         self.build_lab(config_source=NodeMappingConfigSourceChoices.NONE).full_clean()
 
         mapping.refresh_from_db()
