@@ -26,7 +26,14 @@ from containerlab_orchestrator.selection import HIDDEN_DEVICES_MESSAGE
 from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, grant_permission
 from containerlab_orchestrator.tests.test_app_config import DEFAULT_SETTINGS
 from containerlab_orchestrator.tests.test_topology import TopologyTestCase
-from containerlab_orchestrator.topology import CABLE_WARNING, W_MGMT_ONLY, build_topology, to_yaml
+from containerlab_orchestrator.topology import (
+    CABLE_WARNING,
+    SUBNET_ROOM_MESSAGE,
+    W_MGMT_ONLY,
+    build_topology,
+    to_yaml,
+)
+from containerlab_orchestrator.validators import subnet_node_room
 
 
 class BuildLabTestCase(TopologyTestCase):
@@ -144,20 +151,33 @@ class BuildLabTestCase(TopologyTestCase):
         builder.assert_not_called()
         self.assertEqual(raised.exception.messages, [TOO_MANY_DEVICES_MESSAGE.format(lab=self.lab, count=2, limit=1)])
 
+    def test_stub_nodes_do_not_count_toward_device_limit(self):
+        self.connect(self.add_interfaces(self.leaf1, "Ethernet1")[0], self.add_interfaces(self.wan1, "Ethernet1")[0])
+        with override_settings(PLUGINS_CONFIG={APP_NAME: {**DEFAULT_SETTINGS, "max_lab_devices": 2}}):
+            result = build_lab(self.lab)
+        self.assertEqual(result.node_count, 3)
+        self.assertEqual(set(self._rows()), {"arista1", "leaf1", "stub-wan1"})
+
     def test_bad_device_limit_setting_fails(self):
         for value in (True, "100", None, 0):
             with self.subTest(value=value):
                 with override_settings(PLUGINS_CONFIG={APP_NAME: {**DEFAULT_SETTINGS, "max_lab_devices": value}}):
-                    with self.assertRaises(ImproperlyConfigured) as raised:
-                        build_lab(self.lab)
+                    with mock.patch("containerlab_orchestrator.build.select_devices") as selection:
+                        with self.assertRaises(ImproperlyConfigured) as raised:
+                            build_lab(self.lab)
+                selection.assert_not_called()
                 self.assertEqual(str(raised.exception), DEVICE_LIMIT_SETTING_MESSAGE)
 
     def test_failed_build_changes_nothing(self):
         build_lab(self.lab)
         before = self._snapshot()
         Lab.objects.filter(pk=self.lab.pk).update(mgmt_subnet="172.20.30.0/30")
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValidationError) as raised:
             build_lab(self.lab)
+        room = subnet_node_room("172.20.30.0/30")
+        self.assertEqual(
+            raised.exception.message_dict, {"mgmt_subnet": [SUBNET_ROOM_MESSAGE.format(room=room, count=2)]}
+        )
         self.assertEqual(self._snapshot(), before)
 
     def test_failure_after_row_writes_rolls_back(self):
@@ -193,6 +213,13 @@ class BuildLabTestCase(TopologyTestCase):
             build_lab(self.lab, user)
         self.assertEqual(raised.exception.messages, [HIDDEN_DEVICES_MESSAGE.format(count=1, lab=self.lab)])
 
+    def test_build_passes_user_to_topology(self):
+        user = get_user_model().objects.create_user(username="viewer")
+        grant_permission(user, Device, "view", constraints={"name__in": ["arista1", "leaf1"]})
+        with mock.patch("containerlab_orchestrator.build.build_topology", wraps=build_topology) as builder:
+            build_lab(self.lab, user)
+        self.assertEqual(builder.call_args.args[2], user)
+
     def test_changed_lab_fails_with_message(self):
         before = self._snapshot()
 
@@ -213,6 +240,15 @@ class BuildLabTestCase(TopologyTestCase):
         with self.assertRaises(ValidationError) as raised:
             build_lab(self.lab)
         self.assertEqual(raised.exception.messages, [NODE_KEY_MESSAGE.format(node="arista1", key="image")])
+        self.assertEqual(self._snapshot(), before)
+
+    def test_rejected_row_fails_with_node_name(self):
+        build_lab(self.lab)
+        before = self._snapshot()
+        with mock.patch.object(LabNode, "clean", side_effect=ValidationError({"image": "bad"})):
+            with self.assertRaises(ValidationError) as raised:
+                build_lab(self.lab)
+        self.assertEqual(raised.exception.messages, ["Node arista1: bad"])
         self.assertEqual(self._snapshot(), before)
 
     def test_case_only_rename_replaces_the_row(self):

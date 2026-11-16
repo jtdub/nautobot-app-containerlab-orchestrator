@@ -52,7 +52,8 @@ def build_lab(lab, user=None):
     """Build the topology of a saved lab, and store the YAML, the build time, the status, and the node rows.
 
     The reads and the build run with no lock. The writes run in one transaction that locks the lab row, so a
-    failed build changes nothing. With a user, the build uses only the devices and configs that the user can view.
+    failed build does not change the lab or its node rows. With a user, the build uses only the devices and configs
+    that the user can view.
 
     Raises:
         ValidationError: If the selection, the topology, a node row, or the status is not valid, or if the lab
@@ -61,8 +62,9 @@ def build_lab(lab, user=None):
         Lab.DoesNotExist: If the lab row is gone.
     """
     current = Lab.objects.get(pk=lab.pk)
-    devices = select_devices(current, user)
-    _check_device_count(current, devices)
+    limit = _device_limit()
+    devices = list(select_devices(current, user))
+    _check_device_count(current, devices, limit)
     topology, warnings, node_devices = build_topology(current, devices, user)
     status = _next_status(current)
     rows, delete_pks = _checked_rows(current, topology["topology"]["nodes"], node_devices)
@@ -82,12 +84,10 @@ def _device_limit():
     return limit
 
 
-def _check_device_count(lab, devices):
-    """Reject a selection of more devices than the max_lab_devices setting allows."""
-    limit = _device_limit()
-    count = devices.count()
-    if count > limit:
-        raise ValidationError(TOO_MANY_DEVICES_MESSAGE.format(lab=lab, count=count, limit=limit))
+def _check_device_count(lab, devices, limit):
+    """Reject a selection of more devices than the limit."""
+    if len(devices) > limit:
+        raise ValidationError(TOO_MANY_DEVICES_MESSAGE.format(lab=lab, count=len(devices), limit=limit))
 
 
 def _next_status(lab):
