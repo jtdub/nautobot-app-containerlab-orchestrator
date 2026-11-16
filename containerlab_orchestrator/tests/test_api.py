@@ -1,5 +1,7 @@
 """Tests for the REST API of the app."""
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, override_settings
@@ -9,7 +11,10 @@ from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, ObjectChange, Status
 from rest_framework import status
 
+from containerlab_orchestrator import config_sources
 from containerlab_orchestrator.api.serializers import LabSerializer
+from containerlab_orchestrator.choices import NodeMappingConfigSourceChoices
+from containerlab_orchestrator.config_sources import GOLDEN_CONFIG_MESSAGE
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
@@ -157,6 +162,21 @@ class NodeMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disab
         for data in ({"config_source": "jinja2"}, {"config_template": "{% if %}"}):
             with self.subTest(data=data):
                 self.assertIn("config_template", self._post_invalid(**data))
+
+    def test_not_installed_api_rejects_new_and_allows_patch(self):
+        backup = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP
+        mapping = NodeMapping.objects.get(platform__name="linux")
+        NodeMapping.objects.filter(pk=mapping.pk).update(config_source=backup)
+        self.add_permissions("containerlab_orchestrator.change_nodemapping")
+
+        with mock.patch.object(config_sources, "golden_config_installed", return_value=False):
+            errors = self._post_invalid(config_source=backup)
+            response = self.client.patch(self._get_detail_url(mapping), {"memory": "1Gb"}, format="json", **self.header)
+
+        self.assertEqual(errors["config_source"], [GOLDEN_CONFIG_MESSAGE])
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        mapping.refresh_from_db()
+        self.assertEqual((mapping.memory, mapping.config_source), ("1Gb", backup))
 
 
 class InterfaceMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
@@ -338,6 +358,20 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
             with self.subTest(field=field, value=value):
                 errors = self._post_lab(status.HTTP_400_BAD_REQUEST, **{"name": "api-bad", field: value})
                 self.assertEqual(errors, {field: [message]})
+
+    def test_not_installed_api_rejects_new_and_allows_patch(self):
+        intended = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED
+        saved_lab = self.labs[2]
+        self.add_permissions("containerlab_orchestrator.change_lab", "containerlab_orchestrator.view_lab")
+
+        with mock.patch.object(config_sources, "golden_config_installed", return_value=False):
+            errors = self._post_lab(status.HTTP_400_BAD_REQUEST, name="api-gc", config_source=intended)
+            response = self.client.patch(self._get_detail_url(saved_lab), {"name": "lab-gc"}, format="json", **self.header)
+
+        self.assertEqual(errors["config_source"], [GOLDEN_CONFIG_MESSAGE])
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        saved_lab.refresh_from_db()
+        self.assertEqual((saved_lab.name, saved_lab.config_source), ("lab-gc", intended))
 
     def test_owner_shows_no_user_data_except_the_username(self):
         """Nautobot 3.2 and later also drop `username` for a user who cannot view users."""
