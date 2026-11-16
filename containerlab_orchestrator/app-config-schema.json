@@ -26,6 +26,10 @@
             "type": "integer",
             "minimum": 1,
             "default": 300
+        },
+        "stub_node_image": {
+            "type": "string",
+            "default": "alpine:latest"
         }
     },
     "additionalProperties": false

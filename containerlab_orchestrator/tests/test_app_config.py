@@ -17,10 +17,12 @@ APP_NAME = "containerlab_orchestrator"
 DEFAULT_SETTINGS = {
     "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
     "request_timeout": 300,
+    "stub_node_image": "alpine:latest",
 }
 CUSTOM_SETTINGS = {
     "default_node_mapping": {"kind": "nokia_srlinux", "image": "ghcr.io/nokia/srlinux:latest"},
     "request_timeout": 60,
+    "stub_node_image": "registry.local/alpine:3",
 }
 SCHEMA_PATH = Path(containerlab_orchestrator.__file__).parent / "app-config-schema.json"
 
@@ -85,6 +87,7 @@ class AppConfigSchemaTestCase(TestCase):
             "string timeout": {**DEFAULT_SETTINGS, "request_timeout": "300"},
             "float timeout": {**DEFAULT_SETTINGS, "request_timeout": 2.5},
             "zero timeout": {**DEFAULT_SETTINGS, "request_timeout": 0},
+            "integer stub image": {**DEFAULT_SETTINGS, "stub_node_image": 1},
             "unknown top-level key": {**DEFAULT_SETTINGS, "request_timeuot": 300},
             "unknown nested key": {
                 **DEFAULT_SETTINGS,
