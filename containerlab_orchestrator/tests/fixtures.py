@@ -8,6 +8,7 @@ from django.contrib.contenttypes.models import ContentType
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.dcim.models import Device, DeviceType, Location, LocationType, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, Role, Secret, SecretsGroup, SecretsGroupAssociation, Status
+from nautobot.users.models import ObjectPermission
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
@@ -52,6 +53,16 @@ def create_http_secrets_group(name, username=True, password=True):
             secret_type=secret_type,
         )
     return secrets_group
+
+
+def grant_permission(user, model, action, constraints=None):
+    """Give the user an object permission for the action on the model, limited by the constraints."""
+    permission = ObjectPermission.objects.create(
+        name=f"{user} {action} {model._meta.model_name}", actions=[action], constraints=constraints
+    )
+    permission.users.add(user)
+    permission.object_types.add(ContentType.objects.get_for_model(model))
+    return permission
 
 
 def create_containerlab_hosts():
