@@ -17,7 +17,20 @@ Nautobot adds the job turned off. An administrator does these steps one time:
 
 1. Open Jobs > Jobs, and edit the job "Build Lab Topology" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give the `extras.run_job` permission on the job to each user who builds labs.
+3. Give each user who builds labs the permissions in the table below.
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The user selects the lab, and the job checks it. |
+| `containerlab_orchestrator.change_lab` | The job checks it before the build. |
+| `containerlab_orchestrator.view_labnode` | The user sees the node rows on the lab page. |
+| `dcim.view_device` | The build uses only the devices that the user can view. |
+
+The user must also be the owner of the lab, or a superuser.
 
 #### Who can build a lab
 
@@ -32,6 +45,7 @@ The job checks the job user in this order. The first check that fails stops the 
 A lab with no owner, for example after Nautobot deletes the owner account, can get a build from a superuser only.
 The build also uses the view permission of the job user on devices. If the user cannot view some selected devices,
 the build fails.
+The table in "Turn on the job" gives each permission that a builder needs.
 
 #### What a build changes
 

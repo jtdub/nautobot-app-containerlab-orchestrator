@@ -1,3 +1,3 @@
 Added the Build Lab Topology job, which builds the containerlab topology of a lab and stores it with the lab nodes.
 Turn on the Build Lab Topology job under Jobs. Nautobot adds it turned off.
-Only the lab owner or a superuser can build a lab. The user also needs run_job and the change permission on the lab.
+Only the lab owner or a superuser can build a lab. See Build a lab in the user docs for the permissions that a builder needs.
