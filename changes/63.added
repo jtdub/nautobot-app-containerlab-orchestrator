@@ -1,0 +1,2 @@
+Added the Golden Config intended and backup config sources. Install the golden-config extra and enable Golden Config to use them.
+Added the interface rename for Golden Config text, which changes names such as GigabitEthernet0/0/1 and Gi0/0/1 to the names in the interface table.

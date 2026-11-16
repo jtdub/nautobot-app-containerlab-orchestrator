@@ -25,7 +25,7 @@ A device with no node mapping uses the default mapping, which has no config sour
 |---|---|
 | None (kind default) | The node gets no startup config. containerlab uses the default config of the kind. |
 | Jinja2 template | The builder renders the config template of the node mapping. |
-| Golden Config intended, Golden Config backup | Not available yet. The build gives a warning, and the node gets no startup config. |
+| Golden Config intended, Golden Config backup | The builder reads the intended or the backup config of the device from Golden Config, then renames the interfaces. |
 
 The build continues when a node gets no config because of a problem. The build gives one warning for the node. A
 missing template, a template error, and an empty output each give a warning.
@@ -45,6 +45,42 @@ The render does not HTML-escape a value. So `a&b<c>` stays `a&b<c>`.
 !!! warning
     A template can read Nautobot data. Each user who can view the lab can see the result. Give the change permission
     on node mappings only to users that you trust.
+
+#### Golden Config
+
+The Golden Config sources need the `golden-config` extra and the apps `nautobot_plugin_nornir` and
+`nautobot_golden_config` in `PLUGINS` (see the install guide). If Golden Config is not installed, a node with a
+Golden Config source gets a warning and no startup config.
+
+The builder reads the Golden Config record of the device with the permissions of the build user. These cases give a
+warning and no startup config:
+
+- The device has no Golden Config record, or the build user cannot view the record.
+- The intended or the backup config of the record is empty, or has only spaces.
+
+#### Interface rename
+
+A Golden Config text uses the physical interface names of the device. The builder changes each name that has a row in
+the interface table of the node mapping to the `container_name` of the row. These are the rules:
+
+- The builder uses the rows of the interface table only. A linked interface with no row gets a warning, and its name
+  in the text does not change.
+- A name changes only as a whole word. `GigabitEthernet0/0/1` does not change in `GigabitEthernet0/0/10`,
+  `TenGigabitEthernet0/0/1`, or `GigabitEthernet0/0/1/2`.
+- A subinterface keeps its number. `Gi0/0/1.100` becomes `<container_name>.100`.
+- The builder also changes the short form of each name. The short forms are `Gi` (`GigabitEthernet`), `Te`
+  (`TenGigabitEthernet`, `TenGigE`), `Fa` (`FastEthernet`), `Et` (`Ethernet`), `Hu` (`HundredGigabitEthernet`,
+  `HundredGigE`), and `Po` (`Port-channel`).
+- If two names give the same short form, for example `TenGigabitEthernet0/1` and `TenGigE0/1`, the builder does not
+  change that short form. If a short form is also a name in the table, the row of that name applies.
+- The longest name matches first. The builder changes all names in one pass, so a new name does not change again.
+- The match is case-sensitive. `gigabitethernet0/0/1` does not change.
+
+The node OS must accept the new name. containerlab v0.56.0 and later accept the interface alias of the kind as a
+link name, for example `Ethernet1` for `ceos`. Put that alias in the `container_name` column, so the config gets a
+name that the node OS uses.
+
+The Jinja2 source does not rename. A template uses `interface_map` directly.
 
 #### What the stored YAML shows
 
@@ -82,7 +118,7 @@ writes the new config, and a redeploy removes a change that you make in the runn
 
 #### Who can see a startup config
 
-The startup config text is in the topology YAML of the lab. The app leaves the topology YAML out of the change log,
+The startup config text is in the topology YAML of the lab. A Golden Config text can hold secrets of the device. The app leaves the topology YAML out of the change log,
 the webhook payloads, and the job hook payloads. Each user who can view the lab can see it in the REST API, GraphQL,
 export templates, and custom links. containerlab also writes a copy of the text to the disk of the containerlab host.
 
