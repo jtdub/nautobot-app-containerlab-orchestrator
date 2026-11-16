@@ -96,7 +96,7 @@ class StartupConfigTestCase(TopologyTestCase):
         NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(config_source=source, config_template=template)
 
 
-class StartupConfigSourceTestCase(StartupConfigTestCase):
+class StartupConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too-many-ancestors
     """Test the source order and the Jinja2 source of the startup config."""
 
     def nodes_and_warnings(self, devices, source=NodeMappingConfigSourceChoices.NONE, user=None):
@@ -225,7 +225,7 @@ class StartupConfigSourceTestCase(StartupConfigTestCase):
         )
 
 
-class StartupConfigBuildTestCase(StartupConfigTestCase):
+class StartupConfigBuildTestCase(StartupConfigTestCase):  # pylint: disable=too-many-ancestors
     """Test the startup config keys that build_topology writes on the nodes."""
 
     def test_build_escapes_jinja2_output_and_keeps_it(self):
