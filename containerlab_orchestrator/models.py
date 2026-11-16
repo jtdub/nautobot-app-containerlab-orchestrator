@@ -405,17 +405,17 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
             data.pop("topology_yaml", None)
         return change
 
-    def save(self, *, job_fields=False, **kwargs):
+    def save(self, *args, job_fields=False, **kwargs):
         """Save the lab, and keep the job fields of an existing row unless job_fields is True.
 
-        The save first loads the saved job fields into the lab, so the change log shows the values of the row. An
-        explicit update_fields overrides this rule.
+        The save first loads the saved job fields into the lab, so the change log shows the values of the row. A call
+        with positional arguments or an explicit update_fields keeps the Django rule.
 
         Raises:
             Lab.DoesNotExist: If the row of an existing lab is gone.
         """
-        if not self.present_in_database or job_fields or kwargs.get("update_fields") is not None:
-            super().save(**kwargs)
+        if args or not self.present_in_database or job_fields or kwargs.get("update_fields") is not None:
+            super().save(*args, **kwargs)
             return
         kwargs["update_fields"] = [
             field.name
