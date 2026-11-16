@@ -42,6 +42,9 @@ from containerlab_orchestrator.validators import (
     validate_trimmed_name,
 )
 
+LAB_JOB_FIELDS = frozenset({"status", "topology_yaml", "built_at", "last_inspect"})
+"""The lab fields that only the jobs write."""
+
 
 def _saved_value(instance, field_name):
     """Return the value of the field in the saved row of the instance, or None for a new row."""
@@ -401,6 +404,19 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
         for data in (change.object_data, change.object_data_v2):
             data.pop("topology_yaml", None)
         return change
+
+    def save(self, *args, job_fields=False, **kwargs):
+        """Save the lab. On an existing row, do not write the job fields unless job_fields is True.
+
+        An edit then cannot write old job field values over the values of a job. An explicit update_fields stays.
+        """
+        if self.present_in_database and not job_fields and kwargs.get("update_fields") is None:
+            kwargs["update_fields"] = [
+                field.name
+                for field in self._meta.concrete_fields
+                if not field.primary_key and field.name not in LAB_JOB_FIELDS
+            ]
+        super().save(*args, **kwargs)
 
     def clean(self):
         """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.
