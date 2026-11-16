@@ -16,11 +16,13 @@ from containerlab_orchestrator import ContainerlabOrchestratorConfig
 APP_NAME = "containerlab_orchestrator"
 DEFAULT_SETTINGS = {
     "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},
+    "max_lab_devices": 100,
     "request_timeout": 300,
     "stub_node_image": "alpine:latest",
 }
 CUSTOM_SETTINGS = {
     "default_node_mapping": {"kind": "nokia_srlinux", "image": "ghcr.io/nokia/srlinux:latest"},
+    "max_lab_devices": 20,
     "request_timeout": 60,
     "stub_node_image": "registry.local/alpine:3",
 }
@@ -88,6 +90,8 @@ class AppConfigSchemaTestCase(TestCase):
             "float timeout": {**DEFAULT_SETTINGS, "request_timeout": 2.5},
             "zero timeout": {**DEFAULT_SETTINGS, "request_timeout": 0},
             "integer stub image": {**DEFAULT_SETTINGS, "stub_node_image": 1},
+            "zero device limit": {**DEFAULT_SETTINGS, "max_lab_devices": 0},
+            "string device limit": {**DEFAULT_SETTINGS, "max_lab_devices": "100"},
             "unknown top-level key": {**DEFAULT_SETTINGS, "request_timeuot": 300},
             "unknown nested key": {
                 **DEFAULT_SETTINGS,
