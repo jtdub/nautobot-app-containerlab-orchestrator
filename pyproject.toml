@@ -32,6 +32,7 @@ python = ">=3.11,<3.15"
 nautobot = ">=3.1.0,<4.0.0"
 # HTTP client for clab-api-server
 requests = ">=2.32,<3"
+# Optional: Golden Config startup config sources
 nautobot-golden-config = {version = ">=3.1.0,<4.0.0", optional = true}
 
 [tool.poetry.group.dev.dependencies]

@@ -75,6 +75,8 @@ the interface table of the node mapping to the `container_name` of the row. Thes
   change that short form. If a short form is also a name in the table, the row of that name applies.
 - The longest name matches first. The builder changes all names in one pass, so a new name does not change again.
 - The match is case-sensitive. `gigabitethernet0/0/1` does not change.
+- The rename does not change an interface range correctly. In `Gi0/1-Gi0/4`, only the first name changes, so the
+  text becomes `eth1-Gi0/4`. Write each interface on its own line in the Golden Config text.
 
 The node OS must accept the new name. containerlab v0.56.0 and later accept the interface alias of the kind as a
 link name, for example `Ethernet1` for `ceos`. Put that alias in the `container_name` column, so the config gets a
@@ -118,9 +120,10 @@ writes the new config, and a redeploy removes a change that you make in the runn
 
 #### Who can see a startup config
 
-The startup config text is in the topology YAML of the lab. A Golden Config text can hold secrets of the device. The app leaves the topology YAML out of the change log,
-the webhook payloads, and the job hook payloads. Each user who can view the lab can see it in the REST API, GraphQL,
-export templates, and custom links. containerlab also writes a copy of the text to the disk of the containerlab host.
+The startup config text is in the topology YAML of the lab. A Golden Config text can hold secrets of the device.
+The app leaves the topology YAML out of the change log, the webhook payloads, and the job hook payloads. Each user
+who can view the lab can see it in the REST API, GraphQL, export templates, and custom links. containerlab also
+writes a copy of the text to the disk of the containerlab host.
 
 ## Screenshots
 

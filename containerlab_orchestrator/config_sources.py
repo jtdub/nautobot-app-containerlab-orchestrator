@@ -72,10 +72,10 @@ SHORT_FORMS = {
 SHORT_FORM_PATTERN = re.compile(rf"({'|'.join(SHORT_FORMS)})(\d.*)")
 """The pattern of a full interface name with a prefix of SHORT_FORMS. Use it with fullmatch."""
 
-NAME_BEFORE = r"(?<![A-Za-z0-9_-])"
-"""The lookbehind that stops a match at the end of a longer word."""
+NAME_BEFORE = r"(?<![A-Za-z0-9_/-])"
+"""The lookbehind that stops a match at the end of a longer name."""
 
-NAME_AFTER = r"(?![A-Za-z0-9_/])"
+NAME_AFTER = r"(?![A-Za-z0-9_/:])"
 """The lookahead that stops a match at the start of a longer name. A subinterface dot can follow."""
 
 

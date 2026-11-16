@@ -131,6 +131,14 @@ class RenameInterfacesTestCase(TestCase):
     def test_rename_ignores_names_inside_longer_names(self):
         text = "Ethernet1/1 TenGigabitEthernet0/0/1 xEthernet1 Ethernet1_a Et1/1 Gi0/0/1/2"
         self.assertEqual(rename_interfaces(text, {"Ethernet1": "eth1", "GigabitEthernet0/0/1": "eth2"}), text)
+        for text, rename_map in (("2/1/1/1", {"1/1/1": "e1"}), ("xe-0/0/0:1", {"xe-0/0/0": "eth1"})):
+            with self.subTest(text=text):
+                self.assertEqual(rename_interfaces(text, rename_map), text)
+
+    def test_rename_changes_only_the_first_name_of_a_range(self):
+        rename_map = {"GigabitEthernet0/1": "eth1", "GigabitEthernet0/4": "eth4"}
+        renamed = rename_interfaces("interface range Gi0/1-Gi0/4\n", rename_map)
+        self.assertEqual(renamed, "interface range eth1-Gi0/4\n")
 
     def test_rename_handles_each_short_form(self):
         for prefix, short in SHORT_FORMS.items():
@@ -457,6 +465,12 @@ class GoldenConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too-
                 node, warnings = self.arista_config(INTENDED)
                 self.assertNotIn("startup-config", node)
                 self.assertEqual(warnings, [W_EMPTY_CONFIG.format(device="arista1", source="Golden Config intended")])
+
+    def test_golden_config_installed_reads_the_app_registry(self):
+        self.assertTrue(config_sources.golden_config_installed())
+        with mock.patch.dict(apps.app_configs):
+            del apps.app_configs[GOLDEN_CONFIG_APP]
+            self.assertFalse(config_sources.golden_config_installed())
 
     def test_not_installed_build_warns(self):
         self.add_golden_config(self.arista1, intended=GOLDEN_CONFIG_TEXT, backup=GOLDEN_CONFIG_TEXT)
