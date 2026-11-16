@@ -167,7 +167,10 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
     config_template = models.TextField(
         blank=True,
         verbose_name="Config template",
-        help_text="A Jinja2 template for the startup config.",
+        help_text=(
+            "A Jinja2 template for the startup config. WARNING: The template can read Nautobot data. "
+            "Each user who can view the lab can see the result."
+        ),
     )
 
     natural_key_field_names = ["device_type", "platform"]
@@ -368,6 +371,16 @@ class Lab(PrimaryModel):  # pylint: disable=too-many-ancestors
     def __str__(self):
         """Return the lab name."""
         return self.name
+
+    def to_objectchange(self, action, **kwargs):
+        """Return a new ObjectChange without topology_yaml, because the field can hold device configs.
+
+        Webhooks and job hooks read the same change data, so they also do not get the field.
+        """
+        change = super().to_objectchange(action, **kwargs)
+        for data in (change.object_data, change.object_data_v2):
+            data.pop("topology_yaml", None)
+        return change
 
     def clean(self):
         """Reject a duplicate name, a bad device filter, a group of other objects, and a subnet too small for the nodes.

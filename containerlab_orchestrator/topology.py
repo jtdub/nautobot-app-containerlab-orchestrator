@@ -12,6 +12,7 @@ from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
 from nautobot.apps.models import naturalize_interface
 from nautobot.dcim.models import Device, Interface
 
+from containerlab_orchestrator.config_sources import get_startup_config
 from containerlab_orchestrator.constants import APP_NAME
 from containerlab_orchestrator.mapper import FALLBACK_INTERFACE_PREFIX, map_interfaces, resolve_mapping
 from containerlab_orchestrator.validators import subnet_node_room, validate_image_reference, validate_ipv4_network
@@ -40,11 +41,40 @@ and deploy the lab. Keys such as binds and exec act on the containerlab host, so
 Variables: containerlab runs the topology file as a Go template, so a {{ action can write any text into it. Then
 containerlab replaces a $var or ${var} with a value from the host environment. The env entry __IMPORT_ENVS imports all
 host variables. So the builder also drops each value with a $ or a {{, and each __IMPORT_ENVS entry. This applies to
-the overrides and to the mapping fields.
+the overrides and to the mapping fields. A startup config keeps its $ and {{, because the builder escapes them.
 """
 
 HOST_VARIABLE_MARKERS = ("$", "{{")
-"""The text that makes containerlab change a value: a shell variable or a Go template action."""
+"""The text that makes containerlab change a value: a shell variable or a Go template action.
+
+The builder drops a value with a marker in the mapping fields and the overrides. It escapes them in a startup config.
+"""
+
+TEMPLATE_ACTION_ESCAPE = "{{`{{`}}"
+"""The Go template action that writes {{."""
+
+KIND_PASSES = {
+    "cisco_iol": (0, 1),
+    "cisco_vios": (0, 0),
+    "arrcus_arcos": (0, 0),
+    "6wind_vsr": (0, 0),
+    "nokia_srsim": (2, 0),
+}
+"""The passes of each kind on its startup config in containerlab v0.83.0, after the passes on the topology file.
+
+A pair holds the count of env and template passes, then the count of template passes alone. Each row cites the
+containerlab v0.83.0 code in the plan of #15; read it again for a new containerlab version.
+"""
+
+DEFAULT_KIND_PASSES = (1, 0)
+"""The passes of each other kind: GenerateConfig runs SubstituteEnvsAndTemplate one time (default_node.go:660-695)."""
+
+SRL_KINDS = frozenset({"nokia_srlinux", "srl"})
+"""The SR Linux kind names. They use DEFAULT_KIND_PASSES for a CLI config, and render a JSON config one more time
+(srl.go:733-781)."""
+
+SRL_JSON_PASSES = (2, 0)
+"""The passes of an SR Linux startup config whose first character that is not blank is {."""
 
 IMPORT_ENVS_KEY = "__IMPORT_ENVS"
 """The env entry that makes containerlab import all environment variables of the host into the node."""
@@ -126,6 +156,14 @@ W_NAME_VARIABLE = (
 
 _CABLE_RELATION = "cable_termination" if hasattr(Interface, "get_cable_peers") else "cable"
 """The Interface relation to its cable: a reverse one-to-one on Nautobot 3.2 and later, else a foreign key."""
+
+
+class BuildContext(NamedTuple):
+    """The lab, the devices in node order, and the user of a build. With no user, each device is visible."""
+
+    lab: object
+    devices: list
+    user: object
 
 
 class CablePair(NamedTuple):
@@ -251,6 +289,31 @@ def _apply_overrides(node, mapping, warnings, warned_pks):
         warnings.append(W_OVERRIDE.format(mapping=mapping, keys=", ".join(not_allowed)))
     if variables:
         warnings.append(W_VARIABLE.format(mapping=mapping, keys=", ".join(sorted(variables))))
+
+
+def _kind_passes(kind, text):
+    """Return the env and template passes, then the template passes alone, of the kind on the startup config text.
+
+    containerlab makes the kind lowercase before it selects the kind code, so the match ignores case.
+    """
+    kind = kind.lower()
+    if kind in SRL_KINDS and text.lstrip(" \t\r\n").startswith("{"):
+        return SRL_JSON_PASSES
+    return KIND_PASSES.get(kind, DEFAULT_KIND_PASSES)
+
+
+def _containerlab_text(text, kind):
+    """Return the startup config text so that the node of the kind gets it unchanged, with a final newline.
+
+    containerlab reads the topology with one template and one env pass, then the kind passes follow. An env pass
+    changes $$ to $, and a template pass changes TEMPLATE_ACTION_ESCAPE to {{. A text with a newline is always inline
+    text, never a host path or a URL.
+    """
+    env_template, template_only = _kind_passes(kind, text)
+    text = text.replace("$", "$" * 2 ** (1 + env_template))
+    for _ in range(1 + env_template + template_only):
+        text = text.replace("{{", TEMPLATE_ACTION_ESCAPE)
+    return text if text.endswith("\n") else f"{text}\n"
 
 
 def _assign_addresses(lab, names):
@@ -513,17 +576,46 @@ def _linkable_cables(devices, mappings, user, warnings):
     return pairs, _link_names(mappings, pairs, hidden_locals, warnings)
 
 
-def _nodes_and_links(devices, user, warnings):
+def _interface_maps(mappings, container_names):
+    """Return the container name of each physical interface name, for each device pk of the mappings.
+
+    A map holds the interface rows of the mapping, then the container name that the builder gave each linked interface.
+    """
+    maps = {
+        device_pk: {row.physical_name: row.container_name for row in mapping.interface_mappings.all()}
+        for device_pk, mapping in mappings.items()
+    }
+    for interface, name in container_names.items():
+        maps[interface.parent.pk][interface.name] = name
+    return maps
+
+
+def _add_startup_configs(context, device_nodes, mappings, container_names, warnings):
+    """Add the escaped startup config and enforce-startup-config to each device node that has a config.
+
+    The device nodes are in the order of the devices of the context.
+    """
+    interface_maps = _interface_maps(mappings, container_names)
+    for device, node in zip(context.devices, device_nodes):
+        text, config_warnings = get_startup_config(device, mappings[device.pk], interface_maps[device.pk], context.lab)
+        warnings.extend(config_warnings)
+        if text is not None:
+            node["startup-config"] = _containerlab_text(text, node["kind"])
+            node["enforce-startup-config"] = True
+
+
+def _nodes_and_links(context, warnings):
     """Return the nodes with no address, the links, and the device of each node name, with None for a stub."""
-    device_nodes, mappings = _device_nodes(devices, warnings)
-    pairs, container_names = _linkable_cables(devices, mappings, user, warnings)
+    device_nodes, mappings = _device_nodes(context.devices, warnings)
+    pairs, container_names = _linkable_cables(context.devices, mappings, context.user, warnings)
+    _add_startup_configs(context, device_nodes, mappings, container_names, warnings)
     stub_warnings = []
     stubs = _stub_links(pairs, container_names, stub_warnings)
-    node_names, node_devices = _node_names(devices, list(stubs))
+    node_names, node_devices = _node_names(context.devices, list(stubs))
     links = _internal_links(pairs, node_names, container_names, warnings)
     warnings.extend(stub_warnings)
     stub_nodes, stub_links = _stub_nodes(stubs, node_names, container_names)
-    nodes = {node_names[device.pk]: node for device, node in zip(devices, device_nodes)}
+    nodes = {node_names[device.pk]: node for device, node in zip(context.devices, device_nodes)}
     return {**nodes, **stub_nodes}, links + stub_links, node_devices
 
 
@@ -531,7 +623,8 @@ def build_topology(lab, devices, user=None):
     """Return the containerlab topology of the lab, the build warnings, and the device of each node name.
 
     The caller gives only the devices that the user can view. With a user, a cable to an outside device that the
-    user cannot view gets no stub. The device of a stub node name is None.
+    user cannot view gets no stub. The device of a stub node name is None. A device node gets a startup config from
+    its config source. Each node with no config because of a problem gets a warning.
 
     Raises:
         ValidationError: If the lab name or the subnet is not valid, the device list is empty, or a kind has a marker.
@@ -544,7 +637,8 @@ def build_topology(lab, devices, user=None):
     if not unique_devices:
         raise ValidationError(EMPTY_DEVICES_MESSAGE.format(lab=lab))
     warnings = []
-    nodes, links, node_devices = _nodes_and_links(sorted(unique_devices.values(), key=_node_order), user, warnings)
+    context = BuildContext(lab, sorted(unique_devices.values(), key=_node_order), user)
+    nodes, links, node_devices = _nodes_and_links(context, warnings)
     addresses = _assign_addresses(lab, list(nodes))
     topology = {
         "name": lab.name,
@@ -556,6 +650,23 @@ def build_topology(lab, devices, user=None):
     return topology, warnings, node_devices
 
 
+class _TopologyDumper(yaml.SafeDumper):  # pylint: disable=too-many-ancestors
+    """A YAML dumper that writes text with a newline in the literal block style."""
+
+
+def _represent_text(dumper, value):
+    """Return the YAML node of the text, in the literal block style if it has a newline.
+
+    PyYAML uses the double-quoted style when the text cannot be a literal block.
+    """
+    if "\n" in value:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+    return dumper.represent_str(value)
+
+
+_TopologyDumper.add_representer(str, _represent_text)
+
+
 def to_yaml(topology):
     """Return the topology as YAML text, with the keys in the order of the topology."""
-    return yaml.safe_dump(topology, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    return yaml.dump(topology, Dumper=_TopologyDumper, sort_keys=False, default_flow_style=False, allow_unicode=True)

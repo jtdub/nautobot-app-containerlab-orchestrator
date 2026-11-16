@@ -9,10 +9,11 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models import ProtectedError
 from jinja2 import TemplateError
+from nautobot.apps.change_logging import web_request_context
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import ModelTestCases, TestCase
 from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
-from nautobot.extras.models import DynamicGroup, Secret, SecretsGroupAssociation, Status
+from nautobot.extras.models import DynamicGroup, ObjectChange, Secret, SecretsGroupAssociation, Status
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
@@ -623,6 +624,20 @@ class LabCreateDefaultsTestCase(LabTestCase):
         with self.assertRaises(ValidationError) as context:
             lab.set_create_defaults(self.labs[0].owner)
         self.assertEqual(context.exception.messages, [PLANNED_NOT_AVAILABLE_MESSAGE])
+
+
+class LabChangeLogTestCase(LabTestCase):
+    """Test the change log data of a lab."""
+
+    def test_lab_change_log_has_no_topology_yaml(self):
+        lab = self.labs[0]
+        with web_request_context(self.user):
+            lab.topology_yaml = "topology:\n  nodes: {}\n"
+            lab.validated_save()
+        change = ObjectChange.objects.filter(changed_object_id=lab.pk).latest("time")
+        for data in (change.object_data, change.object_data_v2):
+            self.assertEqual(data["name"], "lab-a")
+            self.assertNotIn("topology_yaml", data)
 
 
 class LabStatusMigrationTestCase(TestCase):

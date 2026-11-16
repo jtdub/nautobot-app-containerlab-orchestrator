@@ -127,6 +127,13 @@ class NodeMappingFormTestCase(FormTestCases.BaseFormTestCase):
         self.assertIn("not secret", form.fields["env"].help_text)
         self.assertIn("WARNING", form.fields["overrides"].help_text)
 
+    def test_config_template_help_text_warns(self):
+        self.assertEqual(
+            NodeMappingForm().fields["config_template"].help_text,
+            "A Jinja2 template for the startup config. WARNING: The template can read Nautobot data. "
+            "Each user who can view the lab can see the result.",
+        )
+
     def test_each_rule_shows_form_error(self):
         cases = (
             ({"platform": self.free_platform.pk}, "__all__", BOTH_TARGETS_MESSAGE),
