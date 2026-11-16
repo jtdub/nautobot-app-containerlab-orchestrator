@@ -15,7 +15,9 @@ from nautobot.apps.testing import ModelTestCases, TestCase
 from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
 from nautobot.extras.models import DynamicGroup, ObjectChange, Secret, SecretsGroupAssociation, Status
 
+from containerlab_orchestrator import config_sources
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
+from containerlab_orchestrator.config_sources import GOLDEN_CONFIG_MESSAGE
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
@@ -596,6 +598,65 @@ class LabSelectionCleanTestCase(LabValidationTestCase):  # pylint: disable=too-m
         lab.mgmt_subnet = "172.20.21.0/29"
         lab.full_clean()
         self.build_lab(mgmt_subnet="10.0.0.0/30").full_clean()
+
+
+class GoldenConfigNotInstalledCleanTestCase(LabValidationTestCase):  # pylint: disable=too-many-ancestors
+    """Test the config source rule of node mappings and labs when Golden Config is not installed."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.platforms = [Platform.objects.create(name=name) for name in ("gc-saved", "gc-new")]
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(config_sources, "golden_config_installed", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def new_mapping(self, platform, **fields):
+        """Return an unsaved, valid Platform mapping with the given fields changed."""
+        return NodeMapping(platform=platform, kind="linux", image="alpine:latest", **fields)
+
+    def test_not_installed_clean_rejects_new_golden_config_source(self):
+        intended = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED
+        backup = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP
+        changed_mapping = self.new_mapping(self.platforms[0], config_source=backup)
+        NodeMapping.objects.bulk_create([changed_mapping])
+        changed_mapping.config_source = intended
+        changed_lab = self.labs[2]
+        changed_lab.config_source = backup
+        cases = {
+            "new mapping": self.new_mapping(self.platforms[1], config_source=backup),
+            "changed mapping": changed_mapping,
+            "new lab": self.build_lab(config_source=intended),
+            "changed lab": changed_lab,
+        }
+        for name, instance in cases.items():
+            with self.subTest(case=name):
+                self.assert_errors(instance, {"config_source": [GOLDEN_CONFIG_MESSAGE]})
+
+    def test_not_installed_save_of_other_field_passes(self):
+        backup = NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP
+        mapping = self.new_mapping(self.platforms[0], config_source=backup)
+        NodeMapping.objects.bulk_create([mapping])
+        lab = self.labs[2]
+
+        mapping.memory = "1Gb"
+        mapping.validated_save()
+        lab.name = "lab-gc"
+        lab.validated_save()
+        self.new_mapping(
+            self.platforms[1], config_source=NodeMappingConfigSourceChoices.JINJA2, config_template="x"
+        ).full_clean()
+        self.build_lab(config_source=NodeMappingConfigSourceChoices.NONE).full_clean()
+
+        mapping.refresh_from_db()
+        lab.refresh_from_db()
+        self.assertEqual((mapping.memory, mapping.config_source), ("1Gb", backup))
+        self.assertEqual(
+            (lab.name, lab.config_source), ("lab-gc", NodeMappingConfigSourceChoices.GOLDEN_CONFIG_INTENDED)
+        )
 
 
 class LabDatabaseRuleTestCase(LabTestCase):

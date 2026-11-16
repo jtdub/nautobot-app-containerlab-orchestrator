@@ -4,6 +4,7 @@ import re
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from nautobot.apps.utils import render_jinja2
 
@@ -72,6 +73,9 @@ SHORT_FORMS = {
 SHORT_FORM_PATTERN = re.compile(rf"({'|'.join(SHORT_FORMS)})(\d.*)")
 """The pattern of a full interface name with a prefix of SHORT_FORMS. Use it with fullmatch."""
 
+GOLDEN_CONFIG_MESSAGE = "Golden Config is not installed, so this config source is not available."
+"""The validation error for a new or changed Golden Config source when Golden Config is not installed."""
+
 NAME_BEFORE = r"(?<![A-Za-z0-9_/-])"
 """The lookbehind that stops a match at the end of a longer name."""
 
@@ -92,6 +96,19 @@ def source_of(mapping, lab):
 def golden_config_installed():
     """Return True if the Golden Config app is in the installed apps."""
     return apps.is_installed(GOLDEN_CONFIG_APP)
+
+
+def config_source_choices():
+    """Return the config source choices, without the Golden Config choices when Golden Config is not installed."""
+    if golden_config_installed():
+        return NodeMappingConfigSourceChoices.CHOICES
+    return tuple(choice for choice in NodeMappingConfigSourceChoices.CHOICES if choice[0] not in GOLDEN_CONFIG_FIELDS)
+
+
+def validate_config_source(value):
+    """Raise ValidationError for a Golden Config source when Golden Config is not installed."""
+    if value in GOLDEN_CONFIG_FIELDS and not golden_config_installed():
+        raise ValidationError(GOLDEN_CONFIG_MESSAGE)
 
 
 def _golden_config_text(device, source, user):
