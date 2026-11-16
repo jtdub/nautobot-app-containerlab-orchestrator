@@ -167,7 +167,10 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
     config_template = models.TextField(
         blank=True,
         verbose_name="Config template",
-        help_text="A Jinja2 template for the startup config.",
+        help_text=(
+            "A Jinja2 template for the startup config. WARNING: The template can read Nautobot data. "
+            "Each user who can view the lab can see the result."
+        ),
     )
 
     natural_key_field_names = ["device_type", "platform"]
