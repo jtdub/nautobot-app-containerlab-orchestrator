@@ -2,6 +2,7 @@
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils.html import format_html
 from nautobot.apps.ui import (
     Button,
     ObjectDetailContent,
@@ -9,6 +10,7 @@ from nautobot.apps.ui import (
     ObjectsTablePanel,
     ObjectTextPanel,
     SectionChoices,
+    Tab,
 )
 from nautobot.apps.views import NautobotUIViewSet
 
@@ -16,6 +18,31 @@ from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
 
 INTERFACE_ROWS_PREFIX = "interface_mappings"
+NO_BUILD_TEXT = "This lab has no topology. Run the Build Lab Topology job."
+LARGE_YAML_TEXT = "The topology YAML has {size}. Use Download YAML to get it."
+TAB_YAML_LIMIT = 1_000_000
+"""The most characters of topology YAML that the Topology YAML tab shows."""
+
+
+class TopologyYamlPanel(ObjectTextPanel):
+    """Show the stored topology YAML of the lab as escaped text, or a message when there is none or it is too large."""
+
+    def render_body_content(self, context):
+        """Return the panel body for the topology YAML of the lab in the context."""
+        value = self.get_value(context)
+        if not value:
+            return format_html("<p>{}</p>", NO_BUILD_TEXT)
+        if len(value) > TAB_YAML_LIMIT:
+            return format_html("<p>{}</p>", LARGE_YAML_TEXT.format(size=f"{len(value):,} characters"))
+        return super().render_body_content(context)
+
+
+class TopologyDownloadButton(Button):
+    """Link to the topology YAML download, shown only when the lab has a topology YAML."""
+
+    def should_render(self, context):
+        """Return True if the user has the permissions and the lab in the context has a topology YAML."""
+        return super().should_render(context) and bool(context["object"].topology_yaml)
 
 
 def _has_interface_rows(request):
@@ -203,7 +230,40 @@ class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
                 select_related_fields=["device"],
             ),
         ),
+        extra_tabs=(
+            Tab(
+                tab_id="topology_yaml",
+                label="Topology YAML",
+                weight=Tab.WEIGHT_MAIN_TAB + 50,
+                panels=(
+                    TopologyYamlPanel(
+                        weight=100,
+                        section=SectionChoices.FULL_WIDTH,
+                        label="Topology YAML",
+                        object_field="topology_yaml",
+                        render_as=ObjectTextPanel.RenderOptions.CODE,
+                    ),
+                ),
+            ),
+        ),
+        extra_buttons=(
+            TopologyDownloadButton(
+                weight=100,
+                label="Download YAML",
+                icon="mdi-download",
+                link_name="plugins-api:containerlab_orchestrator-api:lab-topology",
+                render_on_tab_id="topology_yaml",
+                required_permissions=["containerlab_orchestrator.view_lab"],
+            ),
+        ),
     )
+
+    def get_queryset(self):
+        """Return the labs. The list page does not load the topology YAML, because it can be large."""
+        queryset = super().get_queryset()
+        if self.action == "list":
+            return queryset.defer("topology_yaml")
+        return queryset
 
     def form_save(self, form, **kwargs):
         """Save the lab. On create, make the user the owner and set the Planned status.

@@ -4,12 +4,37 @@ This document describes common use-cases and scenarios for this App.
 
 ## General Usage
 
+### Review and download the YAML
+
+After a build, the lab page has a "Topology YAML" tab. The tab shows the stored topology YAML as text. The "Download
+YAML" button on the tab saves the file as `<lab>.clab.yml`. A lab with no build shows "This lab has no topology. Run
+the Build Lab Topology job." and no button.
+
+The tab shows a YAML of 1,000,000 characters or less. For a larger YAML, the tab shows the size and the button. Use
+the button to get the file.
+
+Each user with the view permission on the lab can read and download the YAML. The REST API gives the same file:
+
+```bash
+curl -H "Authorization: Token $TOKEN" -OJ "https://<nautobot>/api/plugins/containerlab-orchestrator/labs/<id>/topology/"
+```
+
+| Response | Cause |
+|---|---|
+| 200, `Content-Type: application/yaml` | The lab has a topology YAML. |
+| 404, `Lab <lab> has no topology. Run the Build Lab Topology job first.` | The lab has no build. |
+| 404, with other text | The user cannot view the lab, or the URL has `?format=yaml` or `?format=csv`. |
+| 403 | The user has no `containerlab_orchestrator.view_lab` permission. |
+| 406 | The `Accept` header allows only `application/yaml` or `text/csv`. Send no `Accept` header, or `*/*`. |
+
+The labs REST API does not return `topology_yaml`, because the text can be large. Use the topology URL above.
+
 ## Use-cases and common workflows
 
 ### Startup configs
 
 The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
-config. The Build job (#16) will write it into the stored topology YAML. Stub nodes get no startup config.
+config. The Build Lab Topology job writes it into the stored topology YAML. Stub nodes get no startup config.
 
 #### Config source
 
@@ -129,8 +154,9 @@ writes the new config, and a redeploy removes a change that you make in the runn
 #### Who can see a startup config
 
 The startup config text is in the topology YAML of the lab. A Golden Config text can hold secrets of the device.
-The app leaves the topology YAML out of the change log, the webhook payloads, and the job hook payloads. Each user
-who can view the lab can see it in the REST API, GraphQL, export templates, and custom links. containerlab also
+The app leaves the topology YAML out of the change log, the webhook payloads, the job hook payloads, and the labs
+REST API. Each user who can view the lab can see it on the Topology YAML tab, in the topology download, GraphQL,
+export templates, and custom links. containerlab also
 writes a copy of the text to the disk of the containerlab host.
 
 ## Screenshots

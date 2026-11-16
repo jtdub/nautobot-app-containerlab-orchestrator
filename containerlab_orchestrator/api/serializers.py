@@ -65,14 +65,15 @@ class LabOwnerSerializer(BaseModelSerializer):
 class LabSerializer(TaggedModelSerializerMixin, NautobotModelSerializer):  # pylint: disable=too-many-ancestors
     """Serializer for Lab.
 
-    The model `clean()` checks the unique name, so a duplicate gets the `name` error key.
+    The model `clean()` checks the unique name, so a duplicate gets the `name` error key. The topology YAML is
+    not a field, because it can be large; the topology action of the lab downloads it.
     """
 
     class Meta:
         """Meta attributes for LabSerializer."""
 
         model = Lab
-        fields = "__all__"
+        exclude = ["topology_yaml"]
         validators = []
 
     def validate(self, attrs):
