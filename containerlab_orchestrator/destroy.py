@@ -1,5 +1,6 @@
 """Destroy the lab of a Nautobot lab on its host, and record the status and the node state."""
 
+from contextlib import suppress
 from http import HTTPStatus
 from typing import NamedTuple
 
@@ -22,8 +23,43 @@ DESTROY_STATUS_MESSAGE = "Lab {lab} is {status}. Only a Deployed or Failed lab c
 PLAIN_NOT_FOUND = "lab '{lab}' not found"
 """The server text of a 404 for a lab that no container of the host has."""
 
+NOT_OWNED_NOT_FOUND = "lab '{lab}' not found or not owned by user"
+"""The server text of a 404 for a lab that another user of the host owns."""
+
 NOT_FOUND_WARNING = "Host {host} has no lab named {lab}."
 """The warning for a destroy call that found no lab of this name on the host."""
+
+NOT_OWNED_MESSAGE = (
+    "Host {host} has a lab named {lab} that another user of the host owns. The job did not destroy it. "
+    "Check the Secrets Group of host {host}."
+)
+"""The error for a destroy call that found a lab of another user of the host."""
+
+DESTROY_BUSY_MESSAGE = (
+    "Host {host} did not destroy lab {lab}, because another operation of the lab runs. "
+    "Wait for it to end, then run the job again."
+)
+"""The message for a destroy call that returned HTTP 409."""
+
+DESTROY_STATUS_CHANGED_MESSAGE = "Lab {lab} changed its status during the destroy, so the job did not set Failed."
+"""The message for a Failed write that the job skipped because the status changed."""
+
+DESTROYED_GUARD_MESSAGE = (
+    "Lab {lab} changed its status while the job ran, so the job did not set Destroyed. "
+    "The destroy call removed the lab from host {host}."
+)
+"""The error for a Destroyed write that the job skipped because the status changed."""
+
+DESTROYED_DELETED_MESSAGE = (
+    "Lab {lab} was deleted while the job ran. The destroy call removed the lab from host {host}."
+)
+"""The error for a lab row that was deleted before the Destroyed write."""
+
+DESTROY_TIME_LIMIT_MESSAGE = (
+    "Lab {lab}: the job time limit stopped the destroy. The lab state is unknown. "
+    "Check the host before you run the job again."
+)
+"""The message for a destroy call that the Celery soft time limit stopped."""
 
 
 class DestroyStatuses(NamedTuple):
@@ -88,12 +124,17 @@ def destroy_on_host(client, lab, statuses, cleanup):
 
     Raises:
         ValidationError: If the destroy call fails, or the job cannot write the result.
+        DestroyTimeLimit: If the Celery soft time limit stops the destroy call. The lab is Failed first.
     """
     warnings = []
     try:
         client.destroy(lab.name, cleanup=cleanup)
     except ClabApiError as error:
         warnings = _destroy_error(lab, statuses, error)
+    except SoftTimeLimitExceeded:
+        with suppress(ValidationError):
+            write_failed(lab, statuses.failed)
+        raise DestroyTimeLimit() from None
     return DestroyResult(*_write_destroyed(lab, statuses.destroyed), warnings)
 
 
@@ -104,9 +145,14 @@ def _destroy_error(lab, statuses, error):
         return [NOT_FOUND_WARNING.format(host=lab.host, lab=lab)]
     if HTTPStatus.OK <= status_code < HTTPStatus.MULTIPLE_CHOICES:
         return []
-    if is_host_change(error):
-        write_failed(lab, statuses.failed)
-    raise ValidationError(error_text(error)) from error
+    if status_code == HTTPStatus.NOT_FOUND and error.server_message == NOT_OWNED_NOT_FOUND.format(lab=lab.name):
+        raise ValidationError(NOT_OWNED_MESSAGE.format(host=lab.host, lab=lab)) from error
+    messages = [error_text(error)]
+    if is_host_change(error) and not write_failed(lab, statuses.failed):
+        messages.append(DESTROY_STATUS_CHANGED_MESSAGE.format(lab=lab))
+    if status_code == HTTPStatus.CONFLICT:
+        messages.append(DESTROY_BUSY_MESSAGE.format(host=lab.host, lab=lab))
+    raise ValidationError(messages) from error
 
 
 def _write_destroyed(lab, destroyed):
@@ -114,9 +160,14 @@ def _write_destroyed(lab, destroyed):
 
     Returns:
         The saved lab, and the count of node rows.
+
+    Raises:
+        ValidationError: If the lab row is gone, or its status changed after the job read it.
     """
     with transaction.atomic():
-        locked = lock_lab(lab)
+        locked = lock_lab(lab, DESTROYED_DELETED_MESSAGE)
+        if locked.status_id != lab.status_id:
+            raise ValidationError(DESTROYED_GUARD_MESSAGE.format(lab=lab, host=lab.host))
         rows = list(locked.lab_nodes.all())
         for row in rows:
             row.state = ""

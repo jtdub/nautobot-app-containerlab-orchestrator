@@ -2,19 +2,26 @@
 
 from unittest import mock
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from nautobot.extras.models import Status
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiError
-from containerlab_orchestrator.deploy import STATUS_MISSING_MESSAGE
+from containerlab_orchestrator.deploy import LAB_DELETED_MESSAGE, STATUS_MISSING_MESSAGE, error_text
 from containerlab_orchestrator.destroy import (
+    DESTROY_BUSY_MESSAGE,
+    DESTROY_STATUS_CHANGED_MESSAGE,
     DESTROY_STATUS_MESSAGE,
+    DESTROYED_DELETED_MESSAGE,
+    DESTROYED_GUARD_MESSAGE,
     NOT_FOUND_WARNING,
+    NOT_OWNED_MESSAGE,
+    DestroyTimeLimit,
     destroy_lab,
 )
 from containerlab_orchestrator.models import Lab, LabNode
@@ -188,9 +195,158 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
 
     def test_missing_status_fails_with_no_api_call(self):
         lab_type = ContentType.objects.get_for_model(Lab)
-        for name in (LabStatusChoices.DESTROYED, LabStatusChoices.FAILED):
-            with self.subTest(status=name):
-                status = Status.objects.get(name=name)
+        for status in Status.objects.filter(name__in=[LabStatusChoices.DESTROYED, LabStatusChoices.FAILED]):
+            with self.subTest(status=status.name):
                 status.content_types.remove(lab_type)
-                self._assert_fails_with_no_api_call([STATUS_MISSING_MESSAGE.format(status=name)])
-                status.content_types.add(lab_type)
+                try:
+                    self._assert_fails_with_no_api_call([STATUS_MISSING_MESSAGE.format(status=status.name)])
+                finally:
+                    status.content_types.add(lab_type)
+
+    def _assert_keeps_state(self, error, messages):
+        """Assert that a destroy call with this error fails with these messages and does not change the lab."""
+        self._set_status(LabStatusChoices.DEPLOYED)
+        self.client_mock.destroy.side_effect = error
+        before = self._state()
+        self._assert_fails_with(messages)
+        self.assertEqual(self._state(), before)
+
+    def test_login_error_keeps_status(self):
+        error = plain_not_found()
+        self.client_mock.login.side_effect = error
+        before = self._state()
+        self._assert_fails_with([error.message])
+        self.client_mock.destroy.assert_not_called()
+        self.assertEqual(self._state(), before)
+        self.client_mock.login.side_effect = SoftTimeLimitExceeded()
+        with self.assertRaises(SoftTimeLimitExceeded) as raised:
+            destroy_lab(self.lab)
+        self.assertNotIsInstance(raised.exception, DestroyTimeLimit)
+        self.client_mock.destroy.assert_not_called()
+        self.assertEqual(self._state(), before)
+
+    def test_other_not_found_keeps_status(self):
+        not_owned = destroy_error(404, "lab 'build-lab' not found or not owned by user")
+        cases = {
+            "not owned": (not_owned, [NOT_OWNED_MESSAGE.format(host=self.lab.host, lab=self.lab)]),
+            "no server text": (destroy_error(404), None),
+            "other lab": (destroy_error(404, "lab 'other-lab' not found"), None),
+        }
+        for case, (error, messages) in cases.items():
+            with self.subTest(case=case):
+                self._assert_keeps_state(error, messages or [error.message])
+
+    def test_host_change_sets_failed(self):
+        closed = ClabApiError(
+            f"Host clab01: {DESTROY_PATH} was sent, but the connection closed before a response came. "
+            "The lab state is unknown.",
+            timed_out=True,
+        )
+        cases = {
+            "500": destroy_error(500),
+            "501": destroy_error(501),
+            "read timeout": destroy_error(None, timed_out=True),
+        }
+        cases["connection closed"] = closed
+        for case, error in cases.items():
+            with self.subTest(case=case):
+                self._set_status(LabStatusChoices.DEPLOYED)
+                self.client_mock.destroy.side_effect = error
+                self._assert_fails_with([error.message])
+                self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+                self.assertEqual(self._node_state(), RUNNING_NODES)
+
+    def test_conflict_and_other_errors_keep_status(self):
+        conflict = destroy_error(409, "lab 'build-lab' is busy")
+        cases = {
+            "409": (conflict, [conflict.message, DESTROY_BUSY_MESSAGE.format(host=self.lab.host, lab=self.lab)]),
+            "400": (destroy_error(400, "bad request"), None),
+            "401": (destroy_error(401, "unauthorized"), None),
+            "403": (destroy_error(403, "forbidden"), None),
+            "connection error": (ClabApiError("Host clab01: cannot reach https://clab01: ConnectionError."), None),
+            "no call": (ClabApiError("Host clab01: the lab name 'x y' is not valid."), None),
+        }
+        for case, (error, messages) in cases.items():
+            with self.subTest(case=case):
+                self._assert_keeps_state(error, messages or [error.message])
+
+    def test_failed_write_skips_a_changed_status(self):
+        destroyed = Status.objects.get(name=LabStatusChoices.DESTROYED)
+
+        def change_then_fail(*_args, **_kwargs):
+            Lab.objects.filter(pk=self.lab.pk).update(status=destroyed)
+            raise destroy_error(500)
+
+        self.client_mock.destroy.side_effect = change_then_fail
+        self._assert_fails_with([destroy_error(500).message, DESTROY_STATUS_CHANGED_MESSAGE.format(lab=self.lab)])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.DESTROYED)
+
+    def test_destroyed_write_skips_a_changed_status(self):
+        failed = Status.objects.get(name=LabStatusChoices.FAILED)
+
+        def change_then_return(*_args, **_kwargs):
+            Lab.objects.filter(pk=self.lab.pk).update(status=failed)
+            return {}
+
+        self.client_mock.destroy.side_effect = change_then_return
+        self._assert_fails_with([DESTROYED_GUARD_MESSAGE.format(lab=self.lab, host=self.lab.host)])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+        self.assertEqual(self._node_state(), RUNNING_NODES)
+
+    def test_soft_time_limit_paths(self):
+        with self.subTest(case="destroy"):
+            self.client_mock.destroy.side_effect = SoftTimeLimitExceeded()
+            with self.assertRaises(DestroyTimeLimit):
+                destroy_lab(self.lab)
+            self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+            self.assertEqual(self._node_state(), RUNNING_NODES)
+            self.client_mock.close.assert_called_once_with()
+        with self.subTest(case="destroy with the row deleted"):
+            self._set_status(LabStatusChoices.DEPLOYED)
+            lab_pk = self.lab.pk
+
+            def delete_then_stop(*_args, **_kwargs):
+                Lab.objects.filter(pk=lab_pk).delete()
+                raise SoftTimeLimitExceeded()
+
+            self.client_mock.destroy.side_effect = delete_then_stop
+            with transaction.atomic():
+                with self.assertRaises(DestroyTimeLimit):
+                    destroy_lab(self.lab)
+                transaction.set_rollback(True)
+        with self.subTest(case="Destroyed write"):
+            self._set_status(LabStatusChoices.DEPLOYED)
+            self.client_mock.destroy.side_effect = None
+            with mock.patch.object(Lab, "save", side_effect=SoftTimeLimitExceeded()) as save:
+                with self.assertRaises(SoftTimeLimitExceeded) as raised:
+                    destroy_lab(self.lab)
+            self.assertNotIsInstance(raised.exception, DestroyTimeLimit)
+            self.assertEqual(save.call_count, 1)
+            self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
+            self.assertEqual(self._node_state(), RUNNING_NODES)
+
+    def test_deleted_lab_fails_with_message(self):
+        lab, host = self._lab(), self._lab().host
+        cases = {"500": (destroy_error(500), LAB_DELETED_MESSAGE), "2xx": (None, DESTROYED_DELETED_MESSAGE)}
+        for case, (error, message) in cases.items():
+            with self.subTest(case=case):
+
+                def delete_then_return(*_args, error=error, **_kwargs):
+                    Lab.objects.filter(pk=lab.pk).delete()
+                    if error:
+                        raise error
+                    return {}
+
+                self.client_mock.destroy.side_effect = delete_then_return
+                with transaction.atomic():
+                    self._assert_fails_with([message.format(lab=lab, host=host)])
+                    self.assertFalse(Lab.objects.filter(pk=lab.pk).exists())
+                    transaction.set_rollback(True)
+
+    def test_server_text_is_cut(self):
+        error = destroy_error(500, "a" * 594 + "MARKER")
+        self.client_mock.destroy.side_effect = error
+        with self.assertRaises(ValidationError) as raised:
+            destroy_lab(self.lab)
+        self.assertEqual(raised.exception.messages, [error_text(error)])
+        self.assertFalse(any("MARKER" in message for message in raised.exception.messages))
