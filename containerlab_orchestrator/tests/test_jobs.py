@@ -1,4 +1,4 @@
-"""Tests for the Build Lab Topology and Deploy Lab jobs."""
+"""Tests for the Build Lab Topology, Deploy Lab, and Destroy Lab jobs."""
 
 from unittest import mock
 
@@ -20,14 +20,18 @@ from containerlab_orchestrator.deploy import (
     TIME_LIMIT_MESSAGE,
     DeployTimeLimit,
 )
+from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, NOT_FOUND_WARNING, DestroyTimeLimit
 from containerlab_orchestrator.jobs import (
     DEPLOY_SUMMARY,
+    DESTROY_SUMMARY,
+    KEEP_DIRECTORY_HELP,
     NO_CHANGE_MESSAGE,
     NO_VIEW_MESSAGE,
     NOT_OWNER_MESSAGE,
     REPLACE_HELP,
     SUMMARY_MESSAGE,
     DeployLab,
+    DestroyLab,
 )
 from containerlab_orchestrator.models import Lab, LabNode, NodeMapping
 from containerlab_orchestrator.selection import EMPTY_SELECTION_MESSAGE, HIDDEN_DEVICES_MESSAGE
@@ -382,3 +386,142 @@ class DeployLabJobTestCase(LabJobTestCase):
         self.assertIn(TIME_LIMIT_MESSAGE.format(lab=self.lab_a), failures)
         self.assertIn(DeployTimeLimit.__name__, job_result.traceback or "")
         self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
+
+
+class DestroyLabJobTestCase(LabJobTestCase):
+    """Run the Destroy Lab job on the Deployed lab-a of clab01."""
+
+    job_class_name = "DestroyLab"
+    patch_target = "containerlab_orchestrator.destroy.ClabApiClient"
+    start_status = LabStatusChoices.DEPLOYED
+
+    def destroy_fails_with(self, status_code, server_message):
+        """Make the destroy call of lab-a fail with this HTTP status and server text, and return the client text."""
+        message = f"Host clab01: DELETE /api/v1/labs/lab-a returned HTTP {status_code}: {server_message}"
+        self.client_mock.destroy.side_effect = ClabApiError(
+            message, status_code=status_code, server_message=server_message
+        )
+        return message
+
+    def test_destroy_job_is_registered_with_time_limits_and_keep_option(self):
+        job_model = Job.objects.get(module_name=JOB_MODULE, job_class_name="DestroyLab")
+        self.assertEqual((job_model.soft_time_limit, job_model.time_limit), (1800, 1900))
+        self.assertFalse(job_model.has_sensitive_variables)
+        self.assertEqual(job_model.grouping, "Containerlab Orchestrator")
+        self.assertTrue(job_model.description.startswith("WARNING:"))
+        self.assertEqual(list(DestroyLab._get_vars()), ["lab", "keep_lab_directory"])
+        keep_field = DestroyLab.keep_lab_directory.as_field()
+        self.assertEqual(keep_field.label, "Keep the lab directory")
+        self.assertFalse(keep_field.initial)
+        self.assertEqual(keep_field.help_text, KEEP_DIRECTORY_HELP)
+
+    def test_owner_destroy_succeeds_with_summary(self):
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result)
+        self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
+        self.client_mock.login.assert_called_once_with()
+        self.client_mock.destroy.assert_called_once_with("lab-a", cleanup=True)
+        summary = DESTROY_SUMMARY.format(lab=self.lab_a, host=self.lab_a.host, nodes=3, warnings=0)
+        successes = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_SUCCESS)
+        self.assertEqual(successes.count(summary), 1)
+        self.assertEqual(job_result.result, {"nodes": 3, "warnings": 0})
+
+    def test_keep_option_reaches_the_service(self):
+        job_result = self.run_job("alice", keep_lab_directory=True)
+        self.assertJobResultStatus(job_result)
+        self.client_mock.destroy.assert_called_once_with("lab-a", cleanup=False)
+
+    def test_superuser_can_destroy_a_lab_of_another_owner(self):
+        get_user_model().objects.create_user(username="destroy-admin", is_superuser=True)
+        job_result = self.run_job("destroy-admin")
+        self.assertJobResultStatus(job_result)
+        self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
+        self.client_mock.destroy.assert_called_once_with("lab-a", cleanup=True)
+
+    def test_non_owner_fails(self):
+        job_result = self.run_job("bob")
+        self.assert_access_failed_with(job_result, NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="destroy"))
+
+    def test_non_owner_without_change_permission_gets_the_owner_message(self):
+        grant_permission(get_user_model().objects.create_user(username="dave"), Lab, "view")
+        job_result = self.run_job("dave")
+        self.assert_access_failed_with(job_result, NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="destroy"))
+
+    def test_user_who_cannot_view_the_lab_gets_a_message_with_no_name(self):
+        grant_permission(self.users["carol"], Lab, "view", constraints={"name": "lab-b"})
+        job_result = self.run_job("carol")
+        self.assert_access_failed_with(job_result, NO_VIEW_MESSAGE.format(verb="destroy"))
+        for entry in job_result.job_log_entries.all():
+            with self.subTest(message=entry.message):
+                self.assertNotIn("lab-a", entry.message)
+                self.assertNotIn("lab-a", entry.log_object)
+
+    def test_owner_without_change_permission_fails(self):
+        grant_permission(self.users["carol"], Lab, "view")
+        lab = self.build(self.lab_a_clab02)
+        job_result = self.run_job("carol", lab)
+        self.assert_access_failed_with(job_result, NO_CHANGE_MESSAGE.format(lab=lab, verb="destroy"), lab)
+
+    def test_lab_with_no_owner_fails_for_a_non_superuser(self):
+        Lab.objects.filter(pk=self.lab_a.pk).update(owner=None)
+        job_result = self.run_job("alice")
+        self.assert_access_failed_with(job_result, NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="destroy"))
+
+    def test_lab_not_on_host_succeeds_with_warning(self):
+        self.destroy_fails_with(404, "lab 'lab-a' not found")
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result)
+        self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
+        warning = NOT_FOUND_WARNING.format(host=self.lab_a.host, lab=self.lab_a)
+        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_WARNING), [warning])
+        self.assertEqual(job_result.result, {"nodes": 3, "warnings": 1})
+
+    def test_api_error_is_in_job_log_and_lab_is_failed(self):
+        message = self.destroy_fails_with(500, "destroy failed")
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE), [message])
+        self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
+
+    def test_job_log_and_result_hold_no_yaml_or_config_of_the_job(self):
+        arista_mapping = create_node_mappings()[0]
+        NodeMapping.objects.filter(pk=arista_mapping.pk).update(
+            config_source=NodeMappingConfigSourceChoices.JINJA2, config_template="hostname MARKER-19-{{ device.name }}"
+        )
+        leaf1 = self.lab_devices["leaf1"]
+        arista1 = Device.objects.create(
+            name="arista1",
+            device_type=arista_mapping.device_type,
+            location=leaf1.location,
+            status=leaf1.status,
+            role=leaf1.role,
+        )
+        self.lab_a.devices.add(arista1)
+        self.lab_a = self.build(self.lab_a)
+        self.assertIn("MARKER-19-arista1", self.lab_a.topology_yaml)
+        self.destroy_fails_with(500, "a" * 590 + "MARKER-19")
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
+        for entry in job_result.job_log_entries.all():
+            with self.subTest(message=entry.message):
+                self.assertNotIn("MARKER-19", entry.message)
+        self.assertNotIn("MARKER-19", str(job_result.result))
+
+    def test_time_limit_in_destroy_logs_unknown_state(self):
+        self.client_mock.destroy.side_effect = SoftTimeLimitExceeded()
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        failures = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
+        self.assertIn(DESTROY_TIME_LIMIT_MESSAGE.format(lab=self.lab_a), failures)
+        self.assertIn(DestroyTimeLimit.__name__, job_result.traceback or "")
+        self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
+
+    def test_time_limit_in_failed_write_logs_unknown_state(self):
+        self.destroy_fails_with(500, "destroy failed")
+        with mock.patch("containerlab_orchestrator.destroy.write_failed", side_effect=SoftTimeLimitExceeded()):
+            job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        failures = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
+        self.assertIn(DESTROY_TIME_LIMIT_MESSAGE.format(lab=self.lab_a), failures)
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)

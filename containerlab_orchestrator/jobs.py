@@ -1,10 +1,12 @@
 """Jobs of the containerlab_orchestrator app."""
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.deploy import TIME_LIMIT_MESSAGE, DeployTimeLimit, deploy_lab
+from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, destroy_lab
 from containerlab_orchestrator.models import Lab
 
 name = "Containerlab Orchestrator"  # pylint: disable=invalid-name
@@ -29,6 +31,15 @@ REPLACE_HELP = (
     "also a lab that Nautobot did not deploy. Select it only when the lab on the host is yours."
 )
 """The help text of the option that replaces a lab on the host."""
+
+DESTROY_SUMMARY = "Destroyed lab {lab} on host {host}: {nodes} node rows cleared, {warnings} warnings."
+"""The success line of a destroy."""
+
+KEEP_DIRECTORY_HELP = (
+    "Keep the lab directory on the host, with the saved configs, the cisco_iol NVRAM, and the nokia_sros saved "
+    "config. Only a later Deploy Lab job with the replace option off uses it again."
+)
+"""The help text of the option that keeps the lab directory on the host."""
 
 
 def lab_access_message(lab, user, verb):
@@ -160,5 +171,52 @@ class DeployLab(Job):
         return {"nodes": result.node_count, "states": result.state_count, "warnings": len(result.warnings)}
 
 
-jobs = [BuildLabTopology, DeployLab]
+class DestroyLab(Job):
+    """Destroy the lab of a Deployed or Failed lab on its containerlab host, and clear its node state."""
+
+    lab = ObjectVar(model=Lab, description="The lab to destroy.")
+    keep_lab_directory = BooleanVar(default=False, label="Keep the lab directory", description=KEEP_DIRECTORY_HELP)
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """Job metadata."""
+
+        name = "Destroy Lab"
+        description = (
+            "WARNING: This deletes the containers of the lab of this name on the host, also a lab that Nautobot did "
+            "not deploy. Destroy a Deployed or Failed lab on its containerlab host."
+        )
+        has_sensitive_variables = False
+        soft_time_limit = 1800
+        time_limit = 1900
+
+    def run(self, lab, keep_lab_directory=False):  # pylint: disable=arguments-differ
+        """Check the access of the job user, destroy the lab, and log the warnings and a summary.
+
+        Returns:
+            The node row and warning counts of the destroy, or None if the destroy failed.
+
+        Raises:
+            SoftTimeLimitExceeded: If the Celery soft time limit stopped the destroy.
+        """
+        if fail_access(self, lab, "destroy"):
+            return None
+        try:
+            result = destroy_lab(lab, keep_lab_directory)
+        except ValidationError as error:
+            for line in error_lines(error):
+                self.fail(line, extra={"object": lab})
+            return None
+        except SoftTimeLimitExceeded:
+            self.fail(DESTROY_TIME_LIMIT_MESSAGE.format(lab=lab), extra={"object": lab})
+            raise
+        for warning in result.warnings:
+            self.logger.warning(warning, extra={"object": result.lab})
+        summary = DESTROY_SUMMARY.format(
+            lab=result.lab, host=result.lab.host, nodes=result.node_count, warnings=len(result.warnings)
+        )
+        self.logger.success(summary, extra={"object": result.lab})
+        return {"nodes": result.node_count, "warnings": len(result.warnings)}
+
+
+jobs = [BuildLabTopology, DeployLab, DestroyLab]
 register_jobs(*jobs)
