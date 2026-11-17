@@ -11,6 +11,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.config import get_app_settings_or_config
 from nautobot.apps.exceptions import SecretError
+from urllib3.exceptions import ProtocolError
 
 from containerlab_orchestrator.constants import APP_NAME
 
@@ -21,10 +22,13 @@ ERROR_BODY_LIMIT = 200
 """Characters of a response body that an error message shows."""
 
 SERVER_DEPLOY_MARGIN = 300
-"""Seconds that clab-api-server gives a deploy after the containerlab timeout."""
+"""Seconds that clab-api-server gives a deploy or a destroy after the containerlab timeout."""
 
 DEPLOY_TRANSFER_MARGIN = 60
 """Seconds that a deploy call waits after the server budget, for the transfer of the response."""
+
+OWNER_CHECK_MARGIN = 120
+"""Seconds of the owner check that clab-api-server runs before a destroy, outside its timeout."""
 
 MAX_CLAB_TIMEOUT = 7200
 """The largest containerlab timeout in seconds that clab-api-server accepts."""
@@ -106,7 +110,7 @@ class ClabApiClient:
         """
         self._lab_path(name)
         topology = self._parse_topology(name, topology_yaml)
-        clab_timeout = min(self.timeout[1], MAX_CLAB_TIMEOUT)
+        clab_timeout = self._clab_timeout()
         return self._request(
             "POST",
             "/api/v1/labs",
@@ -119,9 +123,28 @@ class ClabApiClient:
         """Return the details of the lab."""
         return self._request("GET", self._lab_path(name))
 
-    def destroy(self, name):
-        """Destroy the lab and return the server result."""
-        return self._request("DELETE", self._lab_path(name))
+    def destroy(self, name, cleanup=False):
+        """Destroy the lab and return the server result.
+
+        The call sends the containerlab timeout as deploy() does. It waits for that timeout plus the server, owner
+        check, and transfer margins.
+
+        Args:
+            name: The lab name.
+            cleanup: True to remove the lab directory on the host.
+        """
+        path = self._lab_path(name)
+        clab_timeout = self._clab_timeout()
+        return self._request(
+            "DELETE",
+            path,
+            read_timeout=clab_timeout + SERVER_DEPLOY_MARGIN + OWNER_CHECK_MARGIN + DEPLOY_TRANSFER_MARGIN,
+            params={"cleanup": "true" if cleanup else "false", "timeout": f"{clab_timeout}s"},
+        )
+
+    def _clab_timeout(self):
+        """Return the containerlab timeout in seconds: the request timeout setting, to a maximum of MAX_CLAB_TIMEOUT."""
+        return min(self.timeout[1], MAX_CLAB_TIMEOUT)
 
     def _read_secret(self, secret_type):
         """Return the HTTP(S) secret of this type from the Secrets Group of the host."""
@@ -157,6 +180,16 @@ class ClabApiClient:
             raise ClabApiError(
                 f"Host {self.host}: {method} {path} was sent, but no response came in {read_timeout} seconds. "
                 "The lab state is unknown. Run Inspect.",
+                timed_out=True,
+            )
+        if (
+            isinstance(failure, requests.ConnectionError)
+            and failure.args
+            and isinstance(failure.args[0], ProtocolError)
+        ):
+            raise ClabApiError(
+                f"Host {self.host}: {method} {path} was sent, but the connection closed before a response came. "
+                "The lab state is unknown.",
                 timed_out=True,
             )
         raise ClabApiError(f"Host {self.host}: cannot reach {self.base_url}: {type(failure).__name__}.")

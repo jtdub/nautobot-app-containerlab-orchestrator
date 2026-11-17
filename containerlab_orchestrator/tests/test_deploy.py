@@ -26,6 +26,7 @@ from containerlab_orchestrator.deploy import (
     NO_TOPOLOGY_MESSAGE,
     RENAMED_MESSAGE,
     STATUS_CHANGED_MESSAGE,
+    STATUS_GUARD_DEPLOYED_MESSAGE,
     STATUS_MESSAGE,
     STATUS_MISSING_MESSAGE,
     DeployTimeLimit,
@@ -381,6 +382,27 @@ class DeployLabFailureTestCase(DeployLabTestCase):  # pylint: disable=too-many-a
         self.client_mock.deploy.side_effect = error
         self._assert_fails_with([error.message])
         self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+
+    def test_ok_status_error_is_a_host_change(self):
+        error = ClabApiError("Host clab01: POST /api/v1/labs returned a response that is not JSON.", status_code=200)
+        self.client_mock.deploy.side_effect = error
+        self._assert_fails_with([error.message])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+        self.client_mock.inspect.assert_not_called()
+
+    def test_deployed_write_skips_a_changed_status(self):
+        destroyed = Status.objects.get(name=LabStatusChoices.DESTROYED)
+        self._seed_old_node_state()
+        containers = self.client_mock.inspect.return_value
+
+        def destroy_during_inspect(*_args, **_kwargs):
+            Lab.objects.filter(pk=self.lab.pk).update(status=destroyed)
+            return containers
+
+        self.client_mock.inspect.side_effect = destroy_during_inspect
+        self._assert_fails_with([STATUS_GUARD_DEPLOYED_MESSAGE.format(lab=self.lab, host=self.lab.host)])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.DESTROYED)
+        self.assertEqual(set(self._node_state().values()), {("running", "old")})
 
     def test_conflict_and_other_errors_keep_status(self):
         conflict = api_error(409, "Lab 'build-lab' already exists. Use 'reconfigure=true' to overwrite.")

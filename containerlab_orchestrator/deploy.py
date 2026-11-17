@@ -61,6 +61,11 @@ NEW_BUILD_WARNING = (
 STATUS_CHANGED_MESSAGE = "Lab {lab} changed its status during the deploy, so the job did not set Failed."
 """The message for a Failed write that the job skipped because the status changed."""
 
+STATUS_GUARD_DEPLOYED_MESSAGE = (
+    "Lab {lab} changed its status while the job ran, so the job did not set Deployed. The lab can run on host {host}."
+)
+"""The error for a Deployed write that the job skipped because the status changed."""
+
 TIME_LIMIT_MESSAGE = (
     "Lab {lab}: the job time limit stopped the deploy. The lab state is unknown. "
     "Check the host before you run the job again."
@@ -160,8 +165,13 @@ def error_text(error):
 
 
 def is_host_change(error):
-    """Return True if the host can hold new containers after the failed deploy call."""
-    return error.timed_out or (error.status_code is not None and error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR)
+    """Return True if the host can hold changes after the failed call."""
+    status_code = error.status_code or 0
+    return (
+        error.timed_out
+        or status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
+        or HTTPStatus.OK <= status_code < HTTPStatus.MULTIPLE_CHOICES
+    )
 
 
 def deploy_lab(lab, replace_existing=False):
@@ -180,8 +190,8 @@ def deploy_lab(lab, replace_existing=False):
     current = Lab.objects.select_related("status", "host").get(pk=lab.pk)
     if current.status.name not in DEPLOY_STATUSES:
         raise ValidationError(STATUS_MESSAGE.format(lab=current, status=current.status))
-    statuses = _lab_statuses()
-    nodes = _stored_nodes(current)
+    statuses = lab_statuses()
+    nodes = stored_nodes(current)
     client = ClabApiClient(current.host)
     try:
         return _run_on_host(client, current, nodes, statuses, replace_existing)
@@ -189,31 +199,29 @@ def deploy_lab(lab, replace_existing=False):
         client.close()
 
 
-def _lab_statuses():
+def lab_statuses():
     """Return the Deployed and Failed statuses of labs.
 
     Raises:
         ValidationError: If labs cannot have one of the statuses.
     """
-    lab_statuses = Status.objects.get_for_model(Lab)
-    return LabStatuses(
-        _lab_status(lab_statuses, LabStatusChoices.DEPLOYED), _lab_status(lab_statuses, LabStatusChoices.FAILED)
-    )
+    available = Status.objects.get_for_model(Lab)
+    return LabStatuses(lab_status(available, LabStatusChoices.DEPLOYED), lab_status(available, LabStatusChoices.FAILED))
 
 
-def _lab_status(lab_statuses, name):
+def lab_status(available, name):
     """Return the lab status of this name.
 
     Raises:
         ValidationError: If labs cannot have the status.
     """
     try:
-        return lab_statuses.get(name=name)
+        return available.get(name=name)
     except Status.DoesNotExist as error:
         raise ValidationError(STATUS_MISSING_MESSAGE.format(status=name)) from error
 
 
-def _stored_nodes(lab):
+def stored_nodes(lab):
     """Return the `topology.nodes` mapping of the stored topology of the lab.
 
     Raises:
@@ -248,14 +256,14 @@ def _has_image(node):
 
 def _run_on_host(client, lab, nodes, statuses, replace_existing):
     """Check the images, deploy the lab, read its node state, and return the result."""
-    _preflight(client, lab, nodes)
-    _deploy(client, lab, statuses, replace_existing)
-    containers, warnings = _inspect(client, lab, statuses)
-    saved, state_count = _write_deployed(lab, statuses.deployed, containers, warnings)
+    preflight(client, lab, nodes)
+    deploy_step(client, lab, statuses, replace_existing)
+    containers, warnings = inspect_step(client, lab, statuses)
+    saved, state_count = write_deployed(lab, statuses.deployed, containers, warnings)
     return DeployResult(saved, len(nodes), state_count, warnings)
 
 
-def _preflight(client, lab, nodes):
+def preflight(client, lab, nodes):
     """Stop the deploy when the host does not have an image of a node.
 
     Raises:
@@ -270,7 +278,7 @@ def _preflight(client, lab, nodes):
         raise ValidationError(MISSING_IMAGES_MESSAGE.format(host=lab.host, images=missing))
 
 
-def _deploy(client, lab, statuses, replace_existing):
+def deploy_step(client, lab, statuses, replace_existing):
     """Call the deploy, and set Failed when the failed call can have changed the host.
 
     Raises:
@@ -281,18 +289,18 @@ def _deploy(client, lab, statuses, replace_existing):
         client.deploy(lab.name, lab.topology_yaml, reconfigure=replace_existing)
     except ClabApiError as error:
         messages = [error_text(error)]
-        if is_host_change(error) and not _write_failed(lab, statuses.failed):
+        if is_host_change(error) and not write_failed(lab, statuses.failed):
             messages.append(STATUS_CHANGED_MESSAGE.format(lab=lab))
         if error.status_code == HTTPStatus.CONFLICT:
             messages.append(CONFLICT_MESSAGE.format(host=lab.host, lab=lab))
         raise ValidationError(messages) from error
     except SoftTimeLimitExceeded:
         with suppress(ValidationError):
-            _write_failed(lab, statuses.failed)
+            write_failed(lab, statuses.failed)
         raise DeployTimeLimit() from None
 
 
-def _inspect(client, lab, statuses):
+def inspect_step(client, lab, statuses):
     """Return the containers of the lab and the warnings of the inspect call.
 
     Raises:
@@ -304,15 +312,19 @@ def _inspect(client, lab, statuses):
         return [], [INSPECT_WARNING.format(lab=lab, error=error_text(error))]
     except SoftTimeLimitExceeded:
         with suppress(ValidationError):
-            _write_deployed(lab, statuses.deployed, [], [])
+            write_deployed(lab, statuses.deployed, [], [])
         raise
     if not isinstance(containers, list):
         return [], [INSPECT_WARNING.format(lab=lab, error=NOT_A_LIST)]
     return containers, []
 
 
-def _locked(lab):
+def lock_lab(lab, deleted_message=LAB_DELETED_MESSAGE):
     """Return the lab row with a row lock.
+
+    Args:
+        lab: The lab that the job read at its start.
+        deleted_message: The error text for a lab row that is gone. It can use `{lab}` and `{host}`.
 
     Raises:
         ValidationError: If the lab row is gone.
@@ -320,13 +332,13 @@ def _locked(lab):
     try:
         return Lab.objects.select_for_update().get(pk=lab.pk)
     except Lab.DoesNotExist as error:
-        raise ValidationError(LAB_DELETED_MESSAGE.format(lab=lab, host=lab.host)) from error
+        raise ValidationError(deleted_message.format(lab=lab, host=lab.host)) from error
 
 
-def _write_failed(lab, failed):
+def write_failed(lab, failed):
     """Set the Failed status, and return False if the status changed after the deploy read it."""
     with transaction.atomic():
-        locked = _locked(lab)
+        locked = lock_lab(lab)
         if locked.status_id != lab.status_id:
             return False
         locked.status = failed
@@ -334,16 +346,21 @@ def _write_failed(lab, failed):
     return True
 
 
-def _write_deployed(lab, deployed, containers, warnings):
+def write_deployed(lab, deployed, containers, warnings):
     """Write the node state of each row and the Deployed status in one transaction.
 
     A row with no container gets an empty state and container ID. A new build during the deploy adds a warning.
 
     Returns:
         The saved lab, and the count of rows that got a container.
+
+    Raises:
+        ValidationError: If the lab row is gone, or its status changed after the job read it.
     """
     with transaction.atomic():
-        locked = _locked(lab)
+        locked = lock_lab(lab)
+        if locked.status_id != lab.status_id:
+            raise ValidationError(STATUS_GUARD_DEPLOYED_MESSAGE.format(lab=lab, host=lab.host))
         if locked.built_at != lab.built_at:
             warnings.append(NEW_BUILD_WARNING.format(lab=lab))
         by_node = {
