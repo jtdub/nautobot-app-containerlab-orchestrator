@@ -246,8 +246,8 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
             "500": destroy_error(500),
             "501": destroy_error(501),
             "read timeout": destroy_error(None, timed_out=True),
+            "connection closed": closed,
         }
-        cases["connection closed"] = closed
         for case, error in cases.items():
             with self.subTest(case=case):
                 self._set_status(LabStatusChoices.DEPLOYED)
@@ -346,7 +346,5 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
     def test_server_text_is_cut(self):
         error = destroy_error(500, "a" * 594 + "MARKER")
         self.client_mock.destroy.side_effect = error
-        with self.assertRaises(ValidationError) as raised:
-            destroy_lab(self.lab)
-        self.assertEqual(raised.exception.messages, [error_text(error)])
-        self.assertFalse(any("MARKER" in message for message in raised.exception.messages))
+        self._assert_fails_with([error_text(error)])
+        self.assertNotIn("MARKER", error_text(error))
