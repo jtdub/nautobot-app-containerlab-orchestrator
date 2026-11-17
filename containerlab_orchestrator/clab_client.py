@@ -182,7 +182,11 @@ class ClabApiClient:
                 "The lab state is unknown. Run Inspect.",
                 timed_out=True,
             )
-        if isinstance(failure, requests.ConnectionError) and failure.args and isinstance(failure.args[0], ProtocolError):
+        if (
+            isinstance(failure, requests.ConnectionError)
+            and failure.args
+            and isinstance(failure.args[0], ProtocolError)
+        ):
             raise ClabApiError(
                 f"Host {self.host}: {method} {path} was sent, but the connection closed before a response came. "
                 "The lab state is unknown.",
