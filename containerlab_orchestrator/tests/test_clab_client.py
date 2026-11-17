@@ -171,7 +171,9 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
                 self.send.return_value = fake_response(200, {})
                 with override_settings(PLUGINS_CONFIG={clab_client.APP_NAME: {"request_timeout": request_timeout}}):
                     self.logged_in_client().deploy("lab1", TOPOLOGY_YAML)
-                self.assertEqual(self.sent_requests()[-1].url, f"{HOST_URL}/api/v1/labs?reconfigure=false&timeout={query}")
+                self.assertEqual(
+                    self.sent_requests()[-1].url, f"{HOST_URL}/api/v1/labs?reconfigure=false&timeout={query}"
+                )
                 self.assertEqual(self.send.call_args.kwargs["timeout"], (10, read_timeout))
 
     def test_deploy_with_bad_topology_raises_error_before_request(self):

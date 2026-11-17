@@ -86,7 +86,13 @@ class ImageMatchTestCase(SimpleTestCase):
         )
 
     def test_host_images_rejects_a_list_it_cannot_read(self):
-        for response in ({}, [], {"images": "x"}, {"images": ["x"]}, {"images": [{"repoTags": [5], "repoDigests": []}]}):
+        for response in (
+            {},
+            [],
+            {"images": "x"},
+            {"images": ["x"]},
+            {"images": [{"repoTags": [5], "repoDigests": []}]},
+        ):
             with self.subTest(response=response):
                 with self.assertRaises(ValidationError) as raised:
                     host_images(response, "clab01")
@@ -154,9 +160,7 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         result = deploy_lab(self.lab)
         lab = self._lab()
         self.assertEqual(lab.status.name, LabStatusChoices.DEPLOYED)
-        self.assertEqual(
-            self._node_state(), {"arista1": ("running", "id-arista1"), "leaf1": ("running", "id-leaf1")}
-        )
+        self.assertEqual(self._node_state(), {"arista1": ("running", "id-arista1"), "leaf1": ("running", "id-leaf1")})
         self.assertEqual((result.lab, result.node_count, result.state_count, result.warnings), (lab, 2, 2, []))
         self.client_class.assert_called_once_with(lab.host)
         self.client_mock.inspect.assert_called_once_with("build-lab")
@@ -184,9 +188,7 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         with self.assertRaises(ValidationError) as raised:
             deploy_lab(self.lab)
         images = f"{rows['leaf1'].image} (leaf1)"
-        self.assertEqual(
-            raised.exception.messages, [MISSING_IMAGES_MESSAGE.format(host=self.lab.host, images=images)]
-        )
+        self.assertEqual(raised.exception.messages, [MISSING_IMAGES_MESSAGE.format(host=self.lab.host, images=images)])
         self.client_mock.deploy.assert_not_called()
         self.assertEqual(self._snapshot(), before)
 
