@@ -1,12 +1,82 @@
 """Deploy the stored topology of a lab to its host, and record the status and the node state."""
 
+import json
+from typing import NamedTuple
+
+import yaml
+from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from nautobot.apps.constants import CHARFIELD_MAX_LENGTH
+from nautobot.extras.models import Status
+
+from containerlab_orchestrator.choices import LabStatusChoices
+from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
+from containerlab_orchestrator.models import Lab
+
+DEPLOY_STATUSES = frozenset({LabStatusChoices.BUILT, LabStatusChoices.DESTROYED, LabStatusChoices.FAILED})
+"""The lab statuses that a deploy starts from."""
+
+STATUS_MESSAGE = "Lab {lab} is {status}. Only a Built, Destroyed, or Failed lab can deploy."
+"""The error for a lab whose status cannot deploy."""
+
+NO_TOPOLOGY_MESSAGE = "Lab {lab} has no topology. Run the Build Lab Topology job first."
+"""The error for a lab with no stored topology YAML."""
+
+RENAMED_MESSAGE = "Lab {lab} changed its name after the build. Run the Build Lab Topology job again."
+"""The error for a stored topology whose name is not the lab name."""
+
+BAD_TOPOLOGY_MESSAGE = "Lab {lab} has a topology that the job cannot read. Run the Build Lab Topology job again."
+"""The error for a stored topology that is not in the expected shape."""
+
+STATUS_MISSING_MESSAGE = "The {status} status is not available for labs. Ask an administrator to add it."
+"""The error for a status that a deploy sets and that labs cannot have."""
+
+MISSING_IMAGES_MESSAGE = (
+    "Host {host} does not have these images: {images}. Pull each image on the host, then run the job again."
+)
+"""The error for node images that the host does not have."""
 
 IMAGE_LIST_MESSAGE = "Host {host} returned an image list that the job cannot read."
 """The error for an image list of the host that is not in the expected shape."""
 
+CONFLICT_MESSAGE = (
+    "Host {host} already has a lab named {lab}, or another operation of the lab runs. The job did not replace it. "
+    "Wait for the other operation, or select Replace a lab that exists on the host."
+)
+"""The message for a deploy call that returned HTTP 409."""
+
+INSPECT_WARNING = "Lab {lab} is deployed, but the job cannot read the node state: {error}"
+"""The warning for an inspect call that failed after a deploy."""
+
+NOT_A_LIST = "the response is not a list"
+"""The detail of INSPECT_WARNING for an inspect response that is not a list."""
+
+NEW_BUILD_WARNING = (
+    "Lab {lab} got a new build during the deploy. The host runs the topology of the earlier build. Redeploy the lab."
+)
+"""The warning for a build that wrote a new topology during the deploy."""
+
+STATUS_CHANGED_MESSAGE = "Lab {lab} changed its status during the deploy, so the job did not set Failed."
+"""The message for a Failed write that the job skipped because the status changed."""
+
+TIME_LIMIT_MESSAGE = (
+    "Lab {lab}: the job time limit stopped the deploy. The lab state is unknown. "
+    "Check the host before you run the job again."
+)
+"""The message for a deploy call that the Celery soft time limit stopped."""
+
+LAB_DELETED_MESSAGE = "Lab {lab} was deleted during the deploy. The lab can still run on host {host}."
+"""The error for a lab row that was deleted during the deploy."""
+
 SERVER_TEXT_LIMIT = 500
 """Characters of the server error text that a message keeps."""
+
+CONFLICT_STATUS = 409
+"""The HTTP status of a lab that exists or of an operation that runs."""
+
+SERVER_ERROR_STATUS = 500
+"""The lowest HTTP status of a server error."""
 
 DOCKER_REGISTRY = "docker.io/"
 """The registry of an image name that names no registry."""
@@ -16,6 +86,26 @@ DOCKER_INDEX = "index.docker.io/"
 
 DOCKER_LIBRARY = "library/"
 """The namespace of an official Docker Hub image."""
+
+
+class LabStatuses(NamedTuple):
+    """The statuses that a deploy sets."""
+
+    deployed: Status
+    failed: Status
+
+
+class DeployResult(NamedTuple):
+    """The saved lab, the node and node state counts, and the warnings of a deploy."""
+
+    lab: Lab
+    node_count: int
+    state_count: int
+    warnings: list
+
+
+class DeployTimeLimit(SoftTimeLimitExceeded):
+    """The Celery soft time limit stopped the deploy call."""
 
 
 def normalize_image(reference):
@@ -78,3 +168,201 @@ def error_text(error):
     if server_text and len(server_text) > SERVER_TEXT_LIMIT and error.message.endswith(server_text):
         return error.message[: -len(server_text)] + server_text[:SERVER_TEXT_LIMIT]
     return error.message
+
+
+def is_host_change(error):
+    """Return True if the host can hold new containers after the failed deploy call."""
+    return error.timed_out or (error.status_code is not None and error.status_code >= SERVER_ERROR_STATUS)
+
+
+def deploy_lab(lab, replace_existing=False):
+    """Deploy the stored topology of a saved lab, and write the status and the node state.
+
+    The checks run before any API call. A failure before the deploy call does not change the lab.
+
+    Args:
+        lab: The lab to deploy.
+        replace_existing: True to replace a lab of the same name on the host.
+
+    Raises:
+        ValidationError: If the lab cannot deploy, an image is missing, or a client call fails.
+        DeployTimeLimit: If the Celery soft time limit stops the deploy call.
+    """
+    current = Lab.objects.get(pk=lab.pk)
+    if current.status.name not in DEPLOY_STATUSES:
+        raise ValidationError(STATUS_MESSAGE.format(lab=current, status=current.status))
+    statuses = _lab_statuses()
+    topology = _stored_topology(current)
+    client = ClabApiClient(current.host)
+    try:
+        return _run_on_host(client, current, topology, statuses, replace_existing)
+    finally:
+        client.close()
+
+
+def _lab_statuses():
+    """Return the Deployed and Failed statuses of labs.
+
+    Raises:
+        ValidationError: If labs cannot have one of the statuses.
+    """
+    found = {}
+    for name in (LabStatusChoices.DEPLOYED, LabStatusChoices.FAILED):
+        try:
+            found[name] = Status.objects.get_for_model(Lab).get(name=name)
+        except Status.DoesNotExist as error:
+            raise ValidationError(STATUS_MISSING_MESSAGE.format(status=name)) from error
+    return LabStatuses(found[LabStatusChoices.DEPLOYED], found[LabStatusChoices.FAILED])
+
+
+def _stored_topology(lab):
+    """Return the stored topology of the lab as a mapping.
+
+    Raises:
+        ValidationError: If the lab has no topology, the topology has another name, or the job cannot read it.
+    """
+    if not lab.topology_yaml:
+        raise ValidationError(NO_TOPOLOGY_MESSAGE.format(lab=lab))
+    unreadable = ValidationError(BAD_TOPOLOGY_MESSAGE.format(lab=lab))
+    try:
+        topology = yaml.safe_load(lab.topology_yaml)
+    except yaml.YAMLError as error:
+        raise unreadable from error
+    if not isinstance(topology, dict):
+        raise unreadable
+    if topology.get("name") != lab.name:
+        raise ValidationError(RENAMED_MESSAGE.format(lab=lab))
+    nodes = topology.get("topology", {}).get("nodes") if isinstance(topology.get("topology"), dict) else None
+    if not isinstance(nodes, dict) or not all(_has_image(node) for node in nodes.values()):
+        raise unreadable
+    try:
+        json.dumps(topology, allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise unreadable from error
+    return topology
+
+
+def _has_image(node):
+    """Return True if the topology node is a mapping with an image text."""
+    return isinstance(node, dict) and isinstance(node.get("image"), str) and bool(node["image"])
+
+
+def _run_on_host(client, lab, topology, statuses, replace_existing):
+    """Check the images, deploy the lab, read its node state, and return the result."""
+    nodes = topology["topology"]["nodes"]
+    _preflight(client, lab, nodes)
+    _deploy(client, lab, statuses, replace_existing)
+    containers, warnings = _inspect(client, lab, statuses)
+    saved, state_count = _write_deployed(lab, statuses.deployed, containers, warnings)
+    return DeployResult(saved, len(nodes), state_count, warnings)
+
+
+def _preflight(client, lab, nodes):
+    """Stop the deploy when the host does not have an image of a node.
+
+    Raises:
+        ValidationError: If the image list call fails, the job cannot read the list, or an image is missing.
+    """
+    try:
+        response = client.list_images()
+    except ClabApiError as error:
+        raise ValidationError(error_text(error)) from error
+    missing = missing_images(nodes, host_images(response, lab.host))
+    if missing:
+        raise ValidationError(MISSING_IMAGES_MESSAGE.format(host=lab.host, images=missing))
+
+
+def _deploy(client, lab, statuses, replace_existing):
+    """Call the deploy, and set Failed when the failed call can have changed the host.
+
+    Raises:
+        ValidationError: If the deploy call fails.
+        DeployTimeLimit: If the Celery soft time limit stops the deploy call.
+    """
+    try:
+        client.deploy(lab.name, lab.topology_yaml, reconfigure=replace_existing)
+    except ClabApiError as error:
+        messages = [error_text(error)]
+        if is_host_change(error) and not _write_failed(lab, statuses.failed):
+            messages.append(STATUS_CHANGED_MESSAGE.format(lab=lab))
+        if error.status_code == CONFLICT_STATUS:
+            messages.append(CONFLICT_MESSAGE.format(host=lab.host, lab=lab))
+        raise ValidationError(messages) from error
+    except SoftTimeLimitExceeded:
+        _write_failed(lab, statuses.failed)
+        raise DeployTimeLimit() from None
+
+
+def _inspect(client, lab, statuses):
+    """Return the containers of the lab and the warnings of the inspect call.
+
+    Raises:
+        SoftTimeLimitExceeded: If the Celery soft time limit stops the call. The lab is Deployed first.
+    """
+    try:
+        containers = client.inspect(lab.name)
+    except ClabApiError as error:
+        return [], [INSPECT_WARNING.format(lab=lab, error=error_text(error))]
+    except SoftTimeLimitExceeded:
+        _write_deployed(lab, statuses.deployed, [], [])
+        raise
+    if not isinstance(containers, list):
+        return [], [INSPECT_WARNING.format(lab=lab, error=NOT_A_LIST)]
+    return containers, []
+
+
+def _locked(lab):
+    """Return the lab row with a row lock.
+
+    Raises:
+        ValidationError: If the lab row is gone.
+    """
+    try:
+        return Lab.objects.select_for_update().get(pk=lab.pk)
+    except Lab.DoesNotExist as error:
+        raise ValidationError(LAB_DELETED_MESSAGE.format(lab=lab, host=lab.host)) from error
+
+
+def _write_failed(lab, failed):
+    """Set the Failed status, and return False if the status changed after the deploy read it."""
+    with transaction.atomic():
+        locked = _locked(lab)
+        if locked.status_id != lab.status_id:
+            return False
+        locked.status = failed
+        locked.save(update_fields=["status", "last_updated"])
+    return True
+
+
+def _write_deployed(lab, deployed, containers, warnings):
+    """Write the node state of each row and the Deployed status in one transaction.
+
+    A row with no container gets an empty state and container ID. A new build during the deploy adds a warning.
+
+    Returns:
+        The saved lab, and the count of rows that got a container.
+    """
+    with transaction.atomic():
+        locked = _locked(lab)
+        if locked.built_at != lab.built_at:
+            warnings.append(NEW_BUILD_WARNING.format(lab=lab))
+        by_node = {
+            container["nodeName"]: container
+            for container in containers
+            if isinstance(container, dict) and isinstance(container.get("nodeName"), str)
+        }
+        state_count = 0
+        for row in locked.lab_nodes.all():
+            container = by_node.get(row.node_name, {})
+            row.state = _container_text(container.get("state"))
+            row.container_id = _container_text(container.get("container_id"))
+            row.save(update_fields=["state", "container_id"])
+            state_count += bool(container)
+        locked.status = deployed
+        locked.save(update_fields=["status", "last_updated"])
+    return locked, state_count
+
+
+def _container_text(value):
+    """Return the inspect value cut to CHARFIELD_MAX_LENGTH, or an empty string for a value that is not a text."""
+    return value[:CHARFIELD_MAX_LENGTH] if isinstance(value, str) else ""
