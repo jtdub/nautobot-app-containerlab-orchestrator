@@ -1,11 +1,14 @@
 """Tests for the deploy service that runs the stored topology of a lab on its host."""
 
+import re
 from unittest import mock
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import connection, transaction
 from django.test import SimpleTestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from nautobot.extras.models import Status
 
@@ -37,6 +40,7 @@ from containerlab_orchestrator.tests.test_build import BuildLabTestCase
 
 DIGEST = "sha256:" + "a1" * 32
 SERVER_ERROR_PREFIX = "Host clab01: POST /api/v1/labs returned HTTP 500: "
+LOCKED_LAB_READ = re.compile(r"FROM [`\"]containerlab_orchestrator_lab[`\"] .*FOR UPDATE", re.DOTALL)
 
 
 def api_error(status_code, server_message="failed"):
@@ -148,6 +152,10 @@ class DeployLabTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestors
         """Return the saved row of the lab."""
         return Lab.objects.get(pk=self.lab.pk)
 
+    def _seed_old_node_state(self):
+        """Give each node row an old state and container ID."""
+        LabNode.objects.filter(lab=self.lab).update(state="running", container_id="old")
+
     def _node_state(self):
         """Return the state and the container ID of each node row by node name."""
         return {row.node_name: (row.state, row.container_id) for row in self._rows().values()}
@@ -205,6 +213,7 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         for response, detail in cases:
             with self.subTest(detail=detail[:40]):
                 self._set_status(LabStatusChoices.BUILT)
+                self._seed_old_node_state()
                 self.client_mock.inspect.side_effect = [response] if isinstance(response, dict) else response
                 result = deploy_lab(self.lab)
                 self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
@@ -248,6 +257,27 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
                 self.assertEqual(save.call_count, 1)
                 self.assertEqual(save.call_args.kwargs, {"update_fields": ["status", "last_updated"]})
                 self.assertGreater(self._lab().last_updated, start)
+
+    def test_status_writes_lock_the_lab_row(self):
+        for status, deploy_error in ((LabStatusChoices.DEPLOYED, None), (LabStatusChoices.FAILED, api_error(500))):
+            with self.subTest(status=status):
+                self._set_status(LabStatusChoices.BUILT)
+                self.client_mock.deploy.side_effect = deploy_error
+                with CaptureQueriesContext(connection) as queries:
+                    try:
+                        deploy_lab(self.lab)
+                    except ValidationError:
+                        pass
+                self.assertEqual(self._lab().status.name, status)
+                self.assertTrue(any(LOCKED_LAB_READ.search(query["sql"]) for query in queries.captured_queries))
+
+    def test_failed_status_write_rolls_back_the_node_state(self):
+        self._seed_old_node_state()
+        with mock.patch.object(Lab, "save", side_effect=RuntimeError):
+            with self.assertRaises(RuntimeError):
+                deploy_lab(self.lab)
+        self.assertEqual(set(self._node_state().values()), {("running", "old")})
+        self.assertEqual(self._lab().status.name, LabStatusChoices.BUILT)
 
     def test_client_is_closed(self):
         cases = {
@@ -388,6 +418,7 @@ class DeployLabFailureTestCase(DeployLabTestCase):  # pylint: disable=too-many-a
         for method_name, raised_class, status in cases:
             with self.subTest(method=method_name):
                 self._set_status(LabStatusChoices.BUILT)
+                self._seed_old_node_state()
                 self.client_mock.reset_mock()
                 getattr(self.client_mock, method_name).side_effect = SoftTimeLimitExceeded()
                 with self.assertRaises(raised_class):
@@ -407,3 +438,20 @@ class DeployLabFailureTestCase(DeployLabTestCase):  # pylint: disable=too-many-a
         self.client_mock.deploy.side_effect = delete_then_fail
         self._assert_fails_with([LAB_DELETED_MESSAGE.format(lab=lab, host=host)])
         self.assertFalse(Lab.objects.filter(pk=lab.pk).exists())
+
+    def test_time_limit_after_a_delete_still_raises_the_time_limit(self):
+        lab_pk = self.lab.pk
+
+        def delete_then_stop(*_args, **_kwargs):
+            Lab.objects.filter(pk=lab_pk).delete()
+            raise SoftTimeLimitExceeded()
+
+        for method_name, raised_class in (("deploy", DeployTimeLimit), ("inspect", SoftTimeLimitExceeded)):
+            with self.subTest(method=method_name):
+                self.client_mock.reset_mock()
+                getattr(self.client_mock, method_name).side_effect = delete_then_stop
+                with transaction.atomic():
+                    with self.assertRaises(raised_class):
+                        deploy_lab(self.lab)
+                    transaction.set_rollback(True)
+                getattr(self.client_mock, method_name).side_effect = None

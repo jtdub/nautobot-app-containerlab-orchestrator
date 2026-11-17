@@ -1,6 +1,8 @@
 """Deploy the stored topology of a lab to its host, and record the status and the node state."""
 
 import json
+from contextlib import suppress
+from http import HTTPStatus
 from typing import NamedTuple
 
 import yaml
@@ -50,7 +52,6 @@ INSPECT_WARNING = "Lab {lab} is deployed, but the job cannot read the node state
 """The warning for an inspect call that failed after a deploy."""
 
 NOT_A_LIST = "the response is not a list"
-"""The detail of INSPECT_WARNING for an inspect response that is not a list."""
 
 NEW_BUILD_WARNING = (
     "Lab {lab} got a new build during the deploy. The host runs the topology of the earlier build. Redeploy the lab."
@@ -70,22 +71,10 @@ LAB_DELETED_MESSAGE = "Lab {lab} was deleted during the deploy. The lab can stil
 """The error for a lab row that was deleted during the deploy."""
 
 SERVER_TEXT_LIMIT = 500
-"""Characters of the server error text that a message keeps."""
-
-CONFLICT_STATUS = 409
-"""The HTTP status of a lab that exists or of an operation that runs."""
-
-SERVER_ERROR_STATUS = 500
-"""The lowest HTTP status of a server error."""
 
 DOCKER_REGISTRY = "docker.io/"
-"""The registry of an image name that names no registry."""
-
 DOCKER_INDEX = "index.docker.io/"
-"""The older name of the Docker Hub registry."""
-
 DOCKER_LIBRARY = "library/"
-"""The namespace of an official Docker Hub image."""
 
 
 class LabStatuses(NamedTuple):
@@ -172,7 +161,7 @@ def error_text(error):
 
 def is_host_change(error):
     """Return True if the host can hold new containers after the failed deploy call."""
-    return error.timed_out or (error.status_code is not None and error.status_code >= SERVER_ERROR_STATUS)
+    return error.timed_out or (error.status_code is not None and error.status_code >= HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
 def deploy_lab(lab, replace_existing=False):
@@ -294,11 +283,12 @@ def _deploy(client, lab, statuses, replace_existing):
         messages = [error_text(error)]
         if is_host_change(error) and not _write_failed(lab, statuses.failed):
             messages.append(STATUS_CHANGED_MESSAGE.format(lab=lab))
-        if error.status_code == CONFLICT_STATUS:
+        if error.status_code == HTTPStatus.CONFLICT:
             messages.append(CONFLICT_MESSAGE.format(host=lab.host, lab=lab))
         raise ValidationError(messages) from error
     except SoftTimeLimitExceeded:
-        _write_failed(lab, statuses.failed)
+        with suppress(ValidationError):
+            _write_failed(lab, statuses.failed)
         raise DeployTimeLimit() from None
 
 
@@ -313,7 +303,8 @@ def _inspect(client, lab, statuses):
     except ClabApiError as error:
         return [], [INSPECT_WARNING.format(lab=lab, error=error_text(error))]
     except SoftTimeLimitExceeded:
-        _write_deployed(lab, statuses.deployed, [], [])
+        with suppress(ValidationError):
+            _write_deployed(lab, statuses.deployed, [], [])
         raise
     if not isinstance(containers, list):
         return [], [INSPECT_WARNING.format(lab=lab, error=NOT_A_LIST)]
