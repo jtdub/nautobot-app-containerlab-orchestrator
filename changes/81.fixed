@@ -1,0 +1,1 @@
+Fixed the Deploy Lab job, which now sets Failed when the host closes the connection or sends a response that the job cannot read.
