@@ -90,6 +90,128 @@ The job log shows one line at the warning level for each builder warning, for ex
 no startup config. It shows one line at the failure level for each error, as `<field>: <message>` for a field error.
 A successful build ends with one summary line. The job result holds only the node, link, and warning counts.
 
+### Deploy a lab
+
+The Deploy Lab job deploys the stored topology YAML of a lab to the containerlab host of the lab. It sets the lab
+status, and it writes the state and the container ID of each node row.
+
+#### Turn on the job
+
+Nautobot adds the job turned off. An administrator does these steps one time:
+
+1. Open Jobs > Jobs, and edit the job "Deploy Lab" in the group "Containerlab Orchestrator".
+2. Select "Enabled", and save the job.
+3. Give each user who deploys labs the permissions in the table below.
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The user selects the lab, and the job checks it. |
+| `containerlab_orchestrator.change_lab` | The job checks it before the deploy. |
+| `containerlab_orchestrator.view_labnode` | The user sees the node state on the lab page. |
+
+The user must also be the owner of the lab, or a superuser. The job reads the host credentials from the Secrets Group
+of the host, so the user needs no permission on secrets.
+
+#### Before you use the job in production
+
+The job has no test on a live clab-api-server yet. All its tests use a mocked host. An administrator does this check
+one time for each host:
+
+1. Build a lab of two `linux` nodes, and pull `alpine:latest` on the host.
+2. Run Deploy Lab. Make sure that the lab is Deployed, and that the two node rows have the state `running`.
+3. Remove an image from the host. Then build and deploy a second lab that uses it. Make sure that the job stops with
+   the list of the missing images.
+4. Run Deploy Lab on the first lab again. Make sure that the job fails with the 409 message, and that the status does
+   not change.
+
+#### Who can deploy a lab
+
+The job checks the job user in this order. The first check that fails stops the job. The lab does not change, and
+the job makes no call to the host.
+
+| Check | Message |
+|---|---|
+| The user can view the lab. | "You cannot deploy this lab." The message does not name the lab. |
+| The user is the owner of the lab, or a superuser. | "Only the owner of lab <lab> or a superuser can deploy it." |
+| The user has the change permission on the lab. | "You need the change permission on lab <lab> to deploy it." |
+
+A lab with no owner can get a deploy from a superuser only.
+
+#### Before the deploy
+
+Only a Built, Destroyed, or Failed lab with a stored topology YAML can deploy. A Planned or Deployed lab stops the job.
+If the lab name changed after the build, run the Build Lab Topology job again.
+
+Before the deploy call, the job reads the image list of the host. If the host does not have the image of a node, the
+job stops, and the status does not change. The message lists each missing image with its nodes. The job also stops
+for a public image that containerlab can pull, and for a node with `image-pull-policy`. Pull each image on the host,
+then run the job again.
+
+The job compares the image names in a normal form:
+
+- `index.docker.io/` becomes `docker.io/`.
+- A name with no registry gets `docker.io/`. A Docker Hub name with no path gets `library/`.
+- A name with no tag and no digest gets the tag `latest`. A name with a digest drops its tag.
+
+So `alpine` matches `alpine:latest` and `docker.io/library/alpine:latest`. A Podman image built on the host is
+`localhost/<name>`, and it does not match the node image `<name>`. If the job reports an image that the host has,
+write the full image name in the node mapping, or pull the image with the exact name of the topology.
+
+#### What a deploy changes
+
+| Result | Lab status |
+|---|---|
+| The deploy call returns. | Deployed. Each node row gets the state and the container ID from the host. A row with no container gets empty values. |
+| The inspect call fails, or the soft time limit stops it. | Deployed. The node rows get empty values. A failed inspect call gives a warning. |
+| The deploy call gives HTTP 500 or more, or a read timeout. | Failed. After a read timeout, the lab state on the host is unknown. |
+| The deploy call gives HTTP 409, another HTTP error, or a connection error. | No change. |
+| A check, the image list call, a missing image, or the soft time limit stops the job before the deploy call. | No change. |
+| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. |
+| The hard time limit stops the job. | No change. The lab can run on the host. A next run gets HTTP 409. |
+| The lab is deleted during the deploy. | None. The lab can still run on the host. |
+
+A 409 means that the host already has a lab of this name, or that another operation of the lab runs. The job does
+not replace the lab. Wait for the other operation, or use the option "Replace a lab that exists on the host".
+
+!!! warning
+    This option removes the containers and the lab directory of the lab of that name on the host, also a lab that
+    Nautobot did not deploy. A change that you made in the running lab is lost. Make sure that the lab on the host is
+    yours before you select it.
+
+The option is off by default. With the option on, the job sends `reconfigure=true` to the host.
+
+#### The job log of a deploy
+
+A deploy ends with one summary line, with the node, node state, and warning counts. The job result holds only these
+counts. The job writes no secret, no topology YAML, and no startup config text of its own into the job log.
+
+The job log holds the names of the lab, the host, the nodes, and the images. For a connection error, it holds the URL
+of the host. For an error of the host, it holds up to 500 characters of the containerlab error text. That text can
+quote a part of the topology, a startup config included. A Golden Config text can hold device secrets.
+
+Each user with `extras.view_jobresult` and `extras.view_joblogentry` can read the job log, also a user who cannot
+view the lab. Give these permissions only to users who may read the topology of the lab.
+
+#### Time limits
+
+The job has a soft time limit of 1800 seconds and a hard time limit of 1900 seconds. The job makes four calls to the
+host: login, image list, deploy, and inspect. With the default `request_timeout` of 300 seconds, the calls take up
+to 1600 seconds:
+
+- Login, image list, and inspect: 3 x (10 + 300) = 930 seconds.
+- Deploy: 10 + 300 + 300 + 60 = 670 seconds. The connect timeout is 10 seconds. The host gives containerlab 300
+  seconds, and adds a margin of 300 seconds. The job waits 60 seconds more for the response.
+
+The rest is for the database work. If you set a larger `request_timeout`, set the soft time limit to 4 x
+`request_timeout` + 600, and the hard time limit to 100 seconds more. Change the limits on the edit page of the job.
+The job does not support a c9s (Kubernetes) host. The image list of a c9s host gives HTTP 500, so the job stops before
+the deploy call. The containerlab default timeout for c9s is 10 minutes, so a c9s host also needs a `request_timeout` of
+600 or more.
+
 ### Startup configs
 
 The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
