@@ -20,7 +20,12 @@ from containerlab_orchestrator.deploy import (
     TIME_LIMIT_MESSAGE,
     DeployTimeLimit,
 )
-from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, NOT_FOUND_WARNING, DestroyTimeLimit
+from containerlab_orchestrator.destroy import (
+    DESTROY_BUSY_MESSAGE,
+    DESTROY_TIME_LIMIT_MESSAGE,
+    NOT_FOUND_WARNING,
+    DestroyTimeLimit,
+)
 from containerlab_orchestrator.jobs import (
     DEPLOY_SUMMARY,
     DESTROY_SUMMARY,
@@ -203,7 +208,7 @@ class BuildLabTopologyJobTestCase(TransactionTestCase):
 class LabJobTestCase(TransactionTestCase):
     """Base class that runs a lab job on lab-a of clab01, with a mocked client whose host has each image.
 
-    A subclass sets the job class name, the client to mock, and the status of a built lab. The job writes its log
+    A subclass sets the job class name, the client to mock, and the status that lab-a gets after its build. The job writes its log
     through a second database connection, so these tests commit their data.
     """
 
@@ -474,6 +479,9 @@ class DestroyLabJobTestCase(LabJobTestCase):
         self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
         warning = NOT_FOUND_WARNING.format(host=self.lab_a.host, lab=self.lab_a)
         self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_WARNING), [warning])
+        summary = DESTROY_SUMMARY.format(lab=self.lab_a, host=self.lab_a.host, nodes=3, warnings=1)
+        successes = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_SUCCESS)
+        self.assertEqual(successes.count(summary), 1)
         self.assertEqual(job_result.result, {"nodes": 3, "warnings": 1})
 
     def test_api_error_is_in_job_log_and_lab_is_failed(self):
@@ -482,6 +490,15 @@ class DestroyLabJobTestCase(LabJobTestCase):
         self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
         self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE), [message])
         self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
+
+    def test_busy_host_logs_both_lines_and_keeps_the_status(self):
+        message = self.destroy_fails_with(409, "lab busy")
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        busy = DESTROY_BUSY_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
+        failures = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
+        self.assertEqual(failures, [message, busy])
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
 
     def test_job_log_and_result_hold_no_yaml_or_config_of_the_job(self):
         arista_mapping = create_node_mappings()[0]

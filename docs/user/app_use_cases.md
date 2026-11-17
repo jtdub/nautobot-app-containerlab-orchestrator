@@ -314,8 +314,16 @@ Lab removes it.
 | The destroy call gives HTTP 400, 401, or 403, or the host cannot be reached. | No change. |
 | A check, the login, or the soft time limit stops the job before the destroy call. | No change. |
 | The soft time limit stops the destroy call. | Failed. The lab state on the host is unknown. |
-| The status of the lab changes during the job. | No change. The job writes nothing. |
-| The lab is deleted during the job. | None. |
+| The soft time limit stops the job after the destroy call. | No change. The host no longer has the lab, but the job log says that the state is unknown. |
+| The status of the lab changes during the job. | No change. The job writes nothing. The job log tells if the host still has the lab. |
+| The lab is deleted during the job. | The lab row is gone. The job log tells if the host still has the lab. |
+
+When the status changes or the lab is deleted during the job, the job log tells the state of the host:
+
+- "Host <host> no longer has lab <lab>." The destroy call removed the lab, or the host had no lab of that name.
+- "The lab can still run on host <host>." The lab was deleted, and the destroy call failed with a host error.
+- "Lab <lab> changed its status during the destroy, so the job did not set Failed." The status changed, and the
+  destroy call failed with a host error. The lab can still run on the host.
 
 A container that the host cannot delete gives HTTP 500, so the lab becomes Failed. The host can also give HTTP 500
 after a full destroy. Then the next Destroy Lab job finds no lab on the host, and sets Destroyed.
