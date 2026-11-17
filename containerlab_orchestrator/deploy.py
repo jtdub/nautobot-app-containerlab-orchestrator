@@ -12,7 +12,7 @@ from nautobot.extras.models import Status
 
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
-from containerlab_orchestrator.models import Lab
+from containerlab_orchestrator.models import Lab, LabNode
 
 DEPLOY_STATUSES = frozenset({LabStatusChoices.BUILT, LabStatusChoices.DESTROYED, LabStatusChoices.FAILED})
 """The lab statuses that a deploy starts from."""
@@ -138,14 +138,14 @@ def host_images(response, host):
     images = response.get("images") if isinstance(response, dict) else None
     if not isinstance(images, list) or not all(isinstance(image, dict) for image in images):
         raise ValidationError(IMAGE_LIST_MESSAGE.format(host=host))
-    references = []
+    available = set()
     for image in images:
         for key in ("repoTags", "repoDigests"):
             values = image.get(key, [])
             if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
                 raise ValidationError(IMAGE_LIST_MESSAGE.format(host=host))
-            references.extend(values)
-    return {normalize_image(reference) for reference in references}
+            available.update(normalize_image(value) for value in values)
+    return available
 
 
 def missing_images(nodes, available):
@@ -188,14 +188,14 @@ def deploy_lab(lab, replace_existing=False):
         ValidationError: If the lab cannot deploy, an image is missing, or a client call fails.
         DeployTimeLimit: If the Celery soft time limit stops the deploy call.
     """
-    current = Lab.objects.get(pk=lab.pk)
+    current = Lab.objects.select_related("status", "host").get(pk=lab.pk)
     if current.status.name not in DEPLOY_STATUSES:
         raise ValidationError(STATUS_MESSAGE.format(lab=current, status=current.status))
     statuses = _lab_statuses()
-    topology = _stored_topology(current)
+    nodes = _stored_nodes(current)
     client = ClabApiClient(current.host)
     try:
-        return _run_on_host(client, current, topology, statuses, replace_existing)
+        return _run_on_host(client, current, nodes, statuses, replace_existing)
     finally:
         client.close()
 
@@ -206,17 +206,26 @@ def _lab_statuses():
     Raises:
         ValidationError: If labs cannot have one of the statuses.
     """
-    found = {}
-    for name in (LabStatusChoices.DEPLOYED, LabStatusChoices.FAILED):
-        try:
-            found[name] = Status.objects.get_for_model(Lab).get(name=name)
-        except Status.DoesNotExist as error:
-            raise ValidationError(STATUS_MISSING_MESSAGE.format(status=name)) from error
-    return LabStatuses(found[LabStatusChoices.DEPLOYED], found[LabStatusChoices.FAILED])
+    lab_statuses = Status.objects.get_for_model(Lab)
+    return LabStatuses(
+        _lab_status(lab_statuses, LabStatusChoices.DEPLOYED), _lab_status(lab_statuses, LabStatusChoices.FAILED)
+    )
 
 
-def _stored_topology(lab):
-    """Return the stored topology of the lab as a mapping.
+def _lab_status(lab_statuses, name):
+    """Return the lab status of this name.
+
+    Raises:
+        ValidationError: If labs cannot have the status.
+    """
+    try:
+        return lab_statuses.get(name=name)
+    except Status.DoesNotExist as error:
+        raise ValidationError(STATUS_MISSING_MESSAGE.format(status=name)) from error
+
+
+def _stored_nodes(lab):
+    """Return the `topology.nodes` mapping of the stored topology of the lab.
 
     Raises:
         ValidationError: If the lab has no topology, the topology has another name, or the job cannot read it.
@@ -232,14 +241,15 @@ def _stored_topology(lab):
         raise unreadable
     if topology.get("name") != lab.name:
         raise ValidationError(RENAMED_MESSAGE.format(lab=lab))
-    nodes = topology.get("topology", {}).get("nodes") if isinstance(topology.get("topology"), dict) else None
+    section = topology.get("topology")
+    nodes = section.get("nodes") if isinstance(section, dict) else None
     if not isinstance(nodes, dict) or not all(_has_image(node) for node in nodes.values()):
         raise unreadable
     try:
         json.dumps(topology, allow_nan=False)
     except (TypeError, ValueError) as error:
         raise unreadable from error
-    return topology
+    return nodes
 
 
 def _has_image(node):
@@ -247,9 +257,8 @@ def _has_image(node):
     return isinstance(node, dict) and isinstance(node.get("image"), str) and bool(node["image"])
 
 
-def _run_on_host(client, lab, topology, statuses, replace_existing):
+def _run_on_host(client, lab, nodes, statuses, replace_existing):
     """Check the images, deploy the lab, read its node state, and return the result."""
-    nodes = topology["topology"]["nodes"]
     _preflight(client, lab, nodes)
     _deploy(client, lab, statuses, replace_existing)
     containers, warnings = _inspect(client, lab, statuses)
@@ -351,13 +360,13 @@ def _write_deployed(lab, deployed, containers, warnings):
             for container in containers
             if isinstance(container, dict) and isinstance(container.get("nodeName"), str)
         }
-        state_count = 0
-        for row in locked.lab_nodes.all():
+        rows = list(locked.lab_nodes.all())
+        for row in rows:
             container = by_node.get(row.node_name, {})
             row.state = _container_text(container.get("state"))
             row.container_id = _container_text(container.get("container_id"))
-            row.save(update_fields=["state", "container_id"])
-            state_count += bool(container)
+        LabNode.objects.bulk_update(rows, ["state", "container_id"])
+        state_count = sum(row.node_name in by_node for row in rows)
         locked.status = deployed
         locked.save(update_fields=["status", "last_updated"])
     return locked, state_count

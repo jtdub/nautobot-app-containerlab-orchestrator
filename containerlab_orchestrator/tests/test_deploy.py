@@ -122,7 +122,7 @@ class ImageMatchTestCase(SimpleTestCase):
         self.assertEqual(error_text(transport), transport.message)
 
 
-class DeployLabTestCase(BuildLabTestCase):
+class DeployLabTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestors
     """Base class with the built lab build-lab and a mocked client that deploys it."""
 
     def setUp(self):
