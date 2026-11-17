@@ -1,38 +1,61 @@
 """Jobs of the containerlab_orchestrator app."""
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from nautobot.apps.jobs import Job, ObjectVar, register_jobs
+from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
 
 from containerlab_orchestrator.build import build_lab
+from containerlab_orchestrator.deploy import TIME_LIMIT_MESSAGE, DeployTimeLimit, deploy_lab
 from containerlab_orchestrator.models import Lab
 
 name = "Containerlab Orchestrator"  # pylint: disable=invalid-name
 
-NO_VIEW_MESSAGE = "You cannot build this lab."
+NO_VIEW_MESSAGE = "You cannot {verb} this lab."
 """The error for a user who cannot view the lab. It names no lab, so it shows nothing of the lab."""
 
-NOT_OWNER_MESSAGE = "Only the owner of lab {lab} or a superuser can build it."
+NOT_OWNER_MESSAGE = "Only the owner of lab {lab} or a superuser can {verb} it."
 """The error for a user who is not the owner of the lab and not a superuser."""
 
-NO_CHANGE_MESSAGE = "You need the change permission on lab {lab} to build it."
+NO_CHANGE_MESSAGE = "You need the change permission on lab {lab} to {verb} it."
 """The error for a user who cannot change the lab."""
 
 SUMMARY_MESSAGE = "Built lab {lab}: {nodes} nodes, {links} links, {warnings} warnings. Status: {status}."
 """The success line of a build."""
 
+DEPLOY_SUMMARY = "Deployed lab {lab} on host {host}: {nodes} nodes, {states} node states, {warnings} warnings."
+"""The success line of a deploy."""
 
-def build_access_message(lab, user):
-    """Return the reason that the user cannot build the lab, or an empty string if the user can build it.
+REPLACE_HELP = (
+    "WARNING: This removes the containers and the lab directory of the lab of this name on the host, "
+    "also a lab that Nautobot did not deploy. Select it only when the lab on the host is yours."
+)
+"""The help text of the option that replaces a lab on the host."""
+
+
+def lab_access_message(lab, user, verb):
+    """Return the reason that the user cannot do the verb on the lab, or an empty string if the user can.
 
     The view check comes first, so a user who cannot view the lab gets a message that names no lab.
     """
     if not Lab.objects.restrict(user, "view").filter(pk=lab.pk).exists():
-        return NO_VIEW_MESSAGE
+        return NO_VIEW_MESSAGE.format(verb=verb)
     if not (user.is_superuser or lab.owner_id == user.pk):
-        return NOT_OWNER_MESSAGE.format(lab=lab)
+        return NOT_OWNER_MESSAGE.format(lab=lab, verb=verb)
     if not Lab.objects.restrict(user, "change").filter(pk=lab.pk).exists():
-        return NO_CHANGE_MESSAGE.format(lab=lab)
+        return NO_CHANGE_MESSAGE.format(lab=lab, verb=verb)
     return ""
+
+
+def fail_access(job, lab, verb):
+    """Fail the job if its user cannot do the verb on the lab, and return True if it failed.
+
+    The failure for a user who cannot view the lab has no log object.
+    """
+    message = lab_access_message(lab, job.user, verb)
+    if message == NO_VIEW_MESSAGE.format(verb=verb):
+        job.fail(message)
+    elif message:
+        job.fail(message, extra={"object": lab})
+    return bool(message)
 
 
 def error_lines(error):
@@ -66,12 +89,7 @@ class BuildLabTopology(Job):
         Returns:
             The node, link, and warning counts of the build, or None if the build failed.
         """
-        message = build_access_message(lab, self.user)
-        if message == NO_VIEW_MESSAGE:
-            self.fail(message)
-            return None
-        if message:
-            self.fail(message, extra={"object": lab})
+        if fail_access(self, lab, "build"):
             return None
         try:
             result = build_lab(lab, self.user)
@@ -92,5 +110,55 @@ class BuildLabTopology(Job):
         return {"nodes": result.node_count, "links": result.link_count, "warnings": len(result.warnings)}
 
 
-jobs = [BuildLabTopology]
+class DeployLab(Job):
+    """Deploy the stored topology of a lab to its containerlab host, and record the status and the node state."""
+
+    lab = ObjectVar(model=Lab, description="The lab to deploy.")
+    replace_existing = BooleanVar(
+        default=False, label="Replace a lab that exists on the host", description=REPLACE_HELP
+    )
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """Job metadata."""
+
+        name = "Deploy Lab"
+        description = "Deploy the stored topology of a lab to its containerlab host."
+        has_sensitive_variables = False
+        soft_time_limit = 1800
+        time_limit = 1900
+
+    def run(self, lab, replace_existing=False):  # pylint: disable=arguments-differ
+        """Check the access of the job user, deploy the lab, and log the warnings and a summary.
+
+        Returns:
+            The node, node state, and warning counts of the deploy, or None if the deploy failed.
+
+        Raises:
+            DeployTimeLimit: If the Celery soft time limit stopped the deploy call.
+        """
+        if fail_access(self, lab, "deploy"):
+            return None
+        try:
+            result = deploy_lab(lab, replace_existing)
+        except ValidationError as error:
+            for line in error_lines(error):
+                self.fail(line, extra={"object": lab})
+            return None
+        except DeployTimeLimit:
+            self.fail(TIME_LIMIT_MESSAGE.format(lab=lab), extra={"object": lab})
+            raise
+        for warning in result.warnings:
+            self.logger.warning(warning, extra={"object": result.lab})
+        summary = DEPLOY_SUMMARY.format(
+            lab=result.lab,
+            host=result.lab.host,
+            nodes=result.node_count,
+            states=result.state_count,
+            warnings=len(result.warnings),
+        )
+        self.logger.success(summary, extra={"object": result.lab})
+        return {"nodes": result.node_count, "states": result.state_count, "warnings": len(result.warnings)}
+
+
+jobs = [BuildLabTopology, DeployLab]
 register_jobs(*jobs)
