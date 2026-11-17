@@ -409,7 +409,7 @@ class DestroyLabJobTestCase(LabJobTestCase):
         self.assertFalse(job_model.has_sensitive_variables)
         self.assertEqual(job_model.grouping, "Containerlab Orchestrator")
         self.assertTrue(job_model.description.startswith("WARNING:"))
-        self.assertEqual(list(DestroyLab._get_vars()), ["lab", "keep_lab_directory"])
+        self.assertEqual(list(DestroyLab._get_vars()), ["lab", "keep_lab_directory"])  # pylint: disable=protected-access
         keep_field = DestroyLab.keep_lab_directory.as_field()
         self.assertEqual(keep_field.label, "Keep the lab directory")
         self.assertFalse(keep_field.initial)
