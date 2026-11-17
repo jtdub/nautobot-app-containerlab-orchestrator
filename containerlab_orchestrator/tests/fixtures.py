@@ -1,8 +1,10 @@
 """Test data helpers for the containerlab_orchestrator tests."""
 
+import importlib
 import os
 from unittest import mock
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
@@ -63,6 +65,11 @@ def grant_permission(user, model, action, constraints=None):
     permission.users.add(user)
     permission.object_types.add(ContentType.objects.get_for_model(model))
     return permission
+
+
+def create_lab_statuses():
+    """Create the lab statuses of migration 0005 again, for a test that runs after a database flush."""
+    importlib.import_module("containerlab_orchestrator.migrations.0005_lab_statuses").add_lab_statuses(apps, None)
 
 
 def create_containerlab_hosts():
