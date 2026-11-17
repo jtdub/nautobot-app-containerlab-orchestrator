@@ -2,18 +2,30 @@
 
 from unittest import mock
 
+from celery.exceptions import SoftTimeLimitExceeded
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 from django.utils import timezone
+from nautobot.extras.models import Status
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiError
 from containerlab_orchestrator.deploy import (
+    BAD_TOPOLOGY_MESSAGE,
+    CONFLICT_MESSAGE,
     IMAGE_LIST_MESSAGE,
     INSPECT_WARNING,
+    LAB_DELETED_MESSAGE,
     MISSING_IMAGES_MESSAGE,
     NEW_BUILD_WARNING,
+    NO_TOPOLOGY_MESSAGE,
+    RENAMED_MESSAGE,
+    STATUS_CHANGED_MESSAGE,
+    STATUS_MESSAGE,
+    STATUS_MISSING_MESSAGE,
+    DeployTimeLimit,
     deploy_lab,
     error_text,
     host_images,
@@ -251,3 +263,145 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
                 except ValidationError:
                     pass
                 self.client_mock.close.assert_called_once_with()
+
+
+class DeployLabFailureTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancestors
+    """Test the checks before any API call, and the status after each failed client call."""
+
+    def _assert_fails_with(self, messages):
+        """Assert that the deploy fails with these messages."""
+        with self.assertRaises(ValidationError) as raised:
+            deploy_lab(self.lab)
+        self.assertEqual(raised.exception.messages, messages)
+
+    def _assert_fails_with_no_api_call(self, messages):
+        """Assert that the deploy fails with these messages, makes no client, and does not change the lab."""
+        before = self._snapshot()
+        self._assert_fails_with(messages)
+        self.client_class.assert_not_called()
+        self.assertEqual(self._snapshot(), before)
+
+    def test_status_that_cannot_deploy_fails_with_no_api_call(self):
+        for status in (LabStatusChoices.PLANNED, LabStatusChoices.DEPLOYED):
+            with self.subTest(status=status):
+                self._set_status(status)
+                self._assert_fails_with_no_api_call([STATUS_MESSAGE.format(lab=self.lab, status=status)])
+
+    def test_lab_with_no_topology_fails(self):
+        self._set_status(LabStatusChoices.DESTROYED)
+        Lab.objects.filter(pk=self.lab.pk).update(topology_yaml="")
+        self._assert_fails_with_no_api_call([NO_TOPOLOGY_MESSAGE.format(lab=self.lab)])
+
+    def test_renamed_lab_fails_with_no_api_call(self):
+        Lab.objects.filter(pk=self.lab.pk).update(name="renamed-lab")
+        self._assert_fails_with_no_api_call([RENAMED_MESSAGE.format(lab="renamed-lab")])
+
+    def test_topology_that_cannot_be_read_fails_with_no_api_call(self):
+        cases = {
+            "not valid YAML": "name: [build-lab",
+            "a list": "- build-lab\n",
+            "no topology.nodes": "name: build-lab\ntopology: {}\n",
+            "a node with no image": "name: build-lab\ntopology:\n  nodes:\n    a: {kind: linux}\n",
+            "nan": "name: build-lab\ntopology:\n  nodes:\n    a: {image: alpine}\nvalue: .nan\n",
+        }
+        for case, topology_yaml in cases.items():
+            with self.subTest(case=case):
+                Lab.objects.filter(pk=self.lab.pk).update(topology_yaml=topology_yaml)
+                self._assert_fails_with_no_api_call([BAD_TOPOLOGY_MESSAGE.format(lab=self.lab)])
+
+    def test_missing_status_fails_with_no_api_call(self):
+        lab_type = ContentType.objects.get_for_model(Lab)
+        for name in (LabStatusChoices.DEPLOYED, LabStatusChoices.FAILED):
+            with self.subTest(status=name):
+                status = Status.objects.get(name=name)
+                status.content_types.remove(lab_type)
+                self._assert_fails_with_no_api_call([STATUS_MISSING_MESSAGE.format(status=name)])
+                status.content_types.add(lab_type)
+
+    def test_preflight_api_error_keeps_status(self):
+        error = ClabApiError("Host clab01: cannot reach https://clab01: ConnectionError.")
+        self.client_mock.list_images.side_effect = error
+        before = self._snapshot()
+        self._assert_fails_with([error.message])
+        self.client_mock.deploy.assert_not_called()
+        self.assertEqual(self._snapshot(), before)
+
+    def test_unreadable_image_list_keeps_status(self):
+        self.client_mock.list_images.return_value = {"images": "x"}
+        before = self._snapshot()
+        self._assert_fails_with([IMAGE_LIST_MESSAGE.format(host=self.lab.host)])
+        self.client_mock.deploy.assert_not_called()
+        self.assertEqual(self._snapshot(), before)
+
+    def test_server_error_sets_failed(self):
+        error = api_error(500, "x" * 600)
+        self.client_mock.deploy.side_effect = error
+        self._assert_fails_with([error_text(error)])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+        self.client_mock.inspect.assert_not_called()
+
+    def test_deploy_timeout_sets_failed_with_unknown_state(self):
+        error = ClabApiError(
+            "Host clab01: POST /api/v1/labs was sent, but no response came in 660 seconds. "
+            "The lab state is unknown. Run Inspect.",
+            timed_out=True,
+        )
+        self.client_mock.deploy.side_effect = error
+        self._assert_fails_with([error.message])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
+
+    def test_conflict_and_other_errors_keep_status(self):
+        conflict = api_error(409, "Lab 'build-lab' already exists. Use 'reconfigure=true' to overwrite.")
+        cases = {
+            "409": (conflict, [conflict.message, CONFLICT_MESSAGE.format(host=self.lab.host, lab=self.lab)]),
+            "400": (api_error(400), [api_error(400).message]),
+            "403": (api_error(403), [api_error(403).message]),
+            "connection error": (ClabApiError("Host clab01: cannot reach x: ConnectionError."), None),
+            "no call": (ClabApiError("Host clab01: the topology of lab 'build-lab' is not valid YAML."), None),
+        }
+        for case, (error, messages) in cases.items():
+            with self.subTest(case=case):
+                self.client_mock.deploy.side_effect = error
+                before = self._snapshot()
+                self._assert_fails_with(messages or [error.message])
+                self.assertEqual(self._snapshot(), before)
+
+    def test_failed_write_skips_a_changed_status(self):
+        deployed = Status.objects.get(name=LabStatusChoices.DEPLOYED)
+
+        def deploy_then_fail(*_args, **_kwargs):
+            Lab.objects.filter(pk=self.lab.pk).update(status=deployed)
+            raise api_error(500)
+
+        self.client_mock.deploy.side_effect = deploy_then_fail
+        self._assert_fails_with([api_error(500).message, STATUS_CHANGED_MESSAGE.format(lab=self.lab)])
+        self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
+
+    def test_soft_time_limit_paths(self):
+        cases = (
+            ("deploy", DeployTimeLimit, LabStatusChoices.FAILED),
+            ("list_images", SoftTimeLimitExceeded, LabStatusChoices.BUILT),
+            ("inspect", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED),
+        )
+        for method_name, raised_class, status in cases:
+            with self.subTest(method=method_name):
+                self._set_status(LabStatusChoices.BUILT)
+                self.client_mock.reset_mock()
+                getattr(self.client_mock, method_name).side_effect = SoftTimeLimitExceeded()
+                with self.assertRaises(raised_class):
+                    deploy_lab(self.lab)
+                getattr(self.client_mock, method_name).side_effect = None
+                self.assertEqual(self._lab().status.name, status)
+                self.client_mock.close.assert_called_once_with()
+        self.assertEqual(set(self._node_state().values()), {("", "")})
+
+    def test_deleted_lab_fails_with_message(self):
+        lab, host = self._lab(), self._lab().host
+
+        def delete_then_fail(*_args, **_kwargs):
+            Lab.objects.filter(pk=lab.pk).delete()
+            raise api_error(500)
+
+        self.client_mock.deploy.side_effect = delete_then_fail
+        self._assert_fails_with([LAB_DELETED_MESSAGE.format(lab=lab, host=host)])
+        self.assertFalse(Lab.objects.filter(pk=lab.pk).exists())
