@@ -20,6 +20,15 @@ CONNECT_TIMEOUT = 10
 ERROR_BODY_LIMIT = 200
 """Characters of a response body that an error message shows."""
 
+SERVER_DEPLOY_MARGIN = 300
+"""Seconds that clab-api-server gives a deploy after the containerlab timeout."""
+
+DEPLOY_TRANSFER_MARGIN = 60
+"""Seconds that a deploy call waits after the server budget, for the transfer of the response."""
+
+MAX_CLAB_TIMEOUT = 7200
+"""The largest containerlab timeout in seconds that clab-api-server accepts."""
+
 LAB_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 """The lab name rule of clab-api-server."""
 
@@ -87,6 +96,9 @@ class ClabApiClient:
     def deploy(self, name, topology_yaml, reconfigure=False):
         """Deploy the lab from its topology YAML and return the server result.
 
+        The call sends the request timeout setting, to a maximum of MAX_CLAB_TIMEOUT, as the containerlab timeout. It
+        waits for that timeout plus the server and transfer margins, so the server reports its own result first.
+
         Args:
             name: The lab name. It must be equal to the `name` in the topology.
             topology_yaml: The containerlab topology as YAML text.
@@ -94,10 +106,12 @@ class ClabApiClient:
         """
         self._lab_path(name)
         topology = self._parse_topology(name, topology_yaml)
+        clab_timeout = min(self.timeout[1], MAX_CLAB_TIMEOUT)
         return self._request(
             "POST",
             "/api/v1/labs",
-            params={"reconfigure": "true" if reconfigure else "false"},
+            read_timeout=clab_timeout + SERVER_DEPLOY_MARGIN + DEPLOY_TRANSFER_MARGIN,
+            params={"reconfigure": "true" if reconfigure else "false", "timeout": f"{clab_timeout}s"},
             json={"topologyContent": topology},
         )
 
@@ -123,37 +137,43 @@ class ClabApiClient:
         """Return the header that sends the current token."""
         return {"Authorization": f"Bearer {self.token}"}
 
-    def _send(self, method, path, **kwargs):
+    def _send(self, method, path, read_timeout=None, **kwargs):
         """Send one request and return the response.
+
+        A read_timeout of None uses the request timeout setting.
 
         Raises:
             ClabApiError: If no response came. The error does not chain the transport exception.
         """
         failure = None
+        read_timeout = read_timeout or self.timeout[1]
         try:
-            return self.session.request(method, f"{self.base_url}{path}", timeout=self.timeout, **kwargs)
+            return self.session.request(
+                method, f"{self.base_url}{path}", timeout=(CONNECT_TIMEOUT, read_timeout), **kwargs
+            )
         except requests.RequestException as error:
             failure = error
         if isinstance(failure, requests.ReadTimeout):
             raise ClabApiError(
-                f"Host {self.host}: {method} {path} was sent, but no response came in {self.timeout[1]} seconds. "
+                f"Host {self.host}: {method} {path} was sent, but no response came in {read_timeout} seconds. "
                 "The lab state is unknown. Run Inspect.",
                 timed_out=True,
             )
         raise ClabApiError(f"Host {self.host}: cannot reach {self.base_url}: {type(failure).__name__}.")
 
-    def _request(self, method, path, **kwargs):
+    def _request(self, method, path, read_timeout=None, **kwargs):
         """Send an authenticated request and return the parsed JSON.
 
         Log in first when the client has no token. After a 401 with an earlier token, log in again and retry once.
+        The read timeout applies to the request, not to the login.
         """
         logged_in_now = self.token is None
         if logged_in_now:
             self.login()
-        response = self._send(method, path, headers=self._auth_headers(), **kwargs)
+        response = self._send(method, path, read_timeout, headers=self._auth_headers(), **kwargs)
         if response.status_code == 401 and not logged_in_now:
             self.login()
-            response = self._send(method, path, headers=self._auth_headers(), **kwargs)
+            response = self._send(method, path, read_timeout, headers=self._auth_headers(), **kwargs)
         self._raise_for_status(response, method, path)
         return self._json(response, method, path)
 

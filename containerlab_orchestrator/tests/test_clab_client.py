@@ -156,14 +156,25 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertEqual(self.logged_in_client().deploy("lab1", TOPOLOGY_YAML), {"lab1": []})
         request = self.sent_requests()[0]
         self.assertEqual(request.method, "POST")
-        self.assertEqual(request.url, f"{HOST_URL}/api/v1/labs?reconfigure=false")
+        self.assertEqual(request.url, f"{HOST_URL}/api/v1/labs?reconfigure=false&timeout=300s")
         self.assertEqual(request.headers["Authorization"], f"Bearer {TOKEN}")
         self.assertEqual(json.loads(request.body), {"topologyContent": yaml.safe_load(TOPOLOGY_YAML)})
 
     def test_deploy_with_reconfigure_sends_reconfigure_true(self):
         self.send.return_value = fake_response(200, {})
         self.logged_in_client().deploy("lab1", TOPOLOGY_YAML, reconfigure=True)
-        self.assertEqual(self.sent_requests()[0].url, f"{HOST_URL}/api/v1/labs?reconfigure=true")
+        self.assertEqual(self.sent_requests()[0].url, f"{HOST_URL}/api/v1/labs?reconfigure=true&timeout=300s")
+
+    def test_deploy_sends_timeout_query_and_waits_for_the_server(self):
+        for request_timeout, query, read_timeout in ((300, "300s", 660), (9000, "7200s", 7560)):
+            with self.subTest(request_timeout=request_timeout):
+                self.send.return_value = fake_response(200, {})
+                with override_settings(PLUGINS_CONFIG={clab_client.APP_NAME: {"request_timeout": request_timeout}}):
+                    self.logged_in_client().deploy("lab1", TOPOLOGY_YAML)
+                self.assertEqual(
+                    self.sent_requests()[-1].url, f"{HOST_URL}/api/v1/labs?reconfigure=false&timeout={query}"
+                )
+                self.assertEqual(self.send.call_args.kwargs["timeout"], (10, read_timeout))
 
     def test_deploy_with_bad_topology_raises_error_before_request(self):
         cases = {
@@ -283,13 +294,12 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
 
     def test_read_timeout_raises_timed_out_error_with_inspect_hint(self):
         self.send.side_effect = requests.ReadTimeout("read timed out")
-        client = self.logged_in_client()
         with self.assertRaises(ClabApiError) as context:
-            client.deploy("lab1", TOPOLOGY_YAML)
+            self.logged_in_client().deploy("lab1", TOPOLOGY_YAML)
         error = context.exception
         self.assertTrue(error.timed_out)
         self.assertIsNone(error.status_code)
-        self.assertIn(f"no response came in {client.timeout[1]} seconds", error.message)
+        self.assertIn("no response came in 660 seconds", error.message)
         self.assertIn("Run Inspect", error.message)
         self.assertIn("The lab state is unknown", error.message)
         self.assertIsNone(error.__cause__)
