@@ -335,10 +335,16 @@ def lock_lab(lab, deleted_message=LAB_DELETED_MESSAGE):
         raise ValidationError(deleted_message.format(lab=lab, host=lab.host)) from error
 
 
-def write_failed(lab, failed):
-    """Set the Failed status, and return False if the status changed after the deploy read it."""
+def write_failed(lab, failed, deleted_message=LAB_DELETED_MESSAGE):
+    """Set the Failed status, and return False if the status changed after the job read it.
+
+    Args:
+        lab: The lab that the job read at its start.
+        failed: The Failed status.
+        deleted_message: The error text for a lab row that is gone. It can use `{lab}` and `{host}`.
+    """
     with transaction.atomic():
-        locked = lock_lab(lab)
+        locked = lock_lab(lab, deleted_message)
         if locked.status_id != lab.status_id:
             return False
         locked.status = failed

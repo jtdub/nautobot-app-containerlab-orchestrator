@@ -46,14 +46,15 @@ DESTROY_STATUS_CHANGED_MESSAGE = "Lab {lab} changed its status during the destro
 
 DESTROYED_GUARD_MESSAGE = (
     "Lab {lab} changed its status while the job ran, so the job did not set Destroyed. "
-    "The destroy call removed the lab from host {host}."
+    "Host {host} no longer has lab {lab}."
 )
 """The error for a Destroyed write that the job skipped because the status changed."""
 
-DESTROYED_DELETED_MESSAGE = (
-    "Lab {lab} was deleted while the job ran. The destroy call removed the lab from host {host}."
-)
+DESTROYED_DELETED_MESSAGE = "Lab {lab} was deleted while the job ran. Host {host} no longer has lab {lab}."
 """The error for a lab row that was deleted before the Destroyed write."""
+
+DESTROY_LAB_DELETED_MESSAGE = "Lab {lab} was deleted while the job ran. The lab can still run on host {host}."
+"""The error for a lab row that was deleted before the Failed write of a destroy."""
 
 DESTROY_TIME_LIMIT_MESSAGE = (
     "Lab {lab}: the job time limit stopped the destroy. The lab state is unknown. "
@@ -133,7 +134,7 @@ def destroy_on_host(client, lab, statuses, cleanup):
         warnings = _destroy_error(lab, statuses, error)
     except SoftTimeLimitExceeded:
         with suppress(ValidationError):
-            write_failed(lab, statuses.failed)
+            write_failed(lab, statuses.failed, DESTROY_LAB_DELETED_MESSAGE)
         raise DestroyTimeLimit() from None
     return DestroyResult(*_write_destroyed(lab, statuses.destroyed), warnings)
 
@@ -148,7 +149,7 @@ def _destroy_error(lab, statuses, error):
     if status_code == HTTPStatus.NOT_FOUND and error.server_message == NOT_OWNED_NOT_FOUND.format(lab=lab.name):
         raise ValidationError(NOT_OWNED_MESSAGE.format(host=lab.host, lab=lab)) from error
     messages = [error_text(error)]
-    if is_host_change(error) and not write_failed(lab, statuses.failed):
+    if is_host_change(error) and not write_failed(lab, statuses.failed, DESTROY_LAB_DELETED_MESSAGE):
         messages.append(DESTROY_STATUS_CHANGED_MESSAGE.format(lab=lab))
     if status_code == HTTPStatus.CONFLICT:
         messages.append(DESTROY_BUSY_MESSAGE.format(host=lab.host, lab=lab))

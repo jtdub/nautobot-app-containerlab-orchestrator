@@ -12,9 +12,10 @@ from nautobot.extras.models import Status
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiError
-from containerlab_orchestrator.deploy import LAB_DELETED_MESSAGE, STATUS_MISSING_MESSAGE, error_text
+from containerlab_orchestrator.deploy import STATUS_MISSING_MESSAGE, error_text
 from containerlab_orchestrator.destroy import (
     DESTROY_BUSY_MESSAGE,
+    DESTROY_LAB_DELETED_MESSAGE,
     DESTROY_STATUS_CHANGED_MESSAGE,
     DESTROY_STATUS_MESSAGE,
     DESTROYED_DELETED_MESSAGE,
@@ -247,6 +248,7 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
             "501": destroy_error(501),
             "read timeout": destroy_error(None, timed_out=True),
             "connection closed": closed,
+            "500 with the not-owned text": destroy_error(500, "lab 'build-lab' not found or not owned by user"),
         }
         for case, error in cases.items():
             with self.subTest(case=case):
@@ -258,8 +260,13 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
 
     def test_conflict_and_other_errors_keep_status(self):
         conflict = destroy_error(409, "lab 'build-lab' is busy")
+        busy_not_found = destroy_error(409, "lab 'build-lab' not found")
         cases = {
             "409": (conflict, [conflict.message, DESTROY_BUSY_MESSAGE.format(host=self.lab.host, lab=self.lab)]),
+            "409 with the plain text": (
+                busy_not_found,
+                [busy_not_found.message, DESTROY_BUSY_MESSAGE.format(host=self.lab.host, lab=self.lab)],
+            ),
             "400": (destroy_error(400, "bad request"), None),
             "401": (destroy_error(401, "unauthorized"), None),
             "403": (destroy_error(403, "forbidden"), None),
@@ -301,6 +308,18 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
             self.assertEqual(self._lab().status.name, LabStatusChoices.FAILED)
             self.assertEqual(self._node_state(), RUNNING_NODES)
             self.client_mock.close.assert_called_once_with()
+        with self.subTest(case="destroy with a changed status"):
+            self._set_status(LabStatusChoices.DEPLOYED)
+            destroyed = Status.objects.get(name=LabStatusChoices.DESTROYED)
+
+            def change_then_stop(*_args, **_kwargs):
+                Lab.objects.filter(pk=self.lab.pk).update(status=destroyed)
+                raise SoftTimeLimitExceeded()
+
+            self.client_mock.destroy.side_effect = change_then_stop
+            with self.assertRaises(DestroyTimeLimit):
+                destroy_lab(self.lab)
+            self.assertEqual(self._lab().status.name, LabStatusChoices.DESTROYED)
         with self.subTest(case="destroy with the row deleted"):
             self._set_status(LabStatusChoices.DEPLOYED)
             lab_pk = self.lab.pk
@@ -327,7 +346,11 @@ class DestroyLabFailureTestCase(DestroyLabTestCase):  # pylint: disable=too-many
 
     def test_deleted_lab_fails_with_message(self):
         lab, host = self._lab(), self._lab().host
-        cases = {"500": (destroy_error(500), LAB_DELETED_MESSAGE), "2xx": (None, DESTROYED_DELETED_MESSAGE)}
+        cases = {
+            "500": (destroy_error(500), DESTROY_LAB_DELETED_MESSAGE),
+            "2xx": (None, DESTROYED_DELETED_MESSAGE),
+            "plain 404": (plain_not_found(), DESTROYED_DELETED_MESSAGE),
+        }
         for case, (error, message) in cases.items():
             with self.subTest(case=case):
 
