@@ -10,6 +10,7 @@ import yaml
 from django.test import override_settings
 from nautobot.apps.choices import SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import TestCase
+from urllib3.exceptions import NewConnectionError, ProtocolError
 
 from containerlab_orchestrator import clab_client
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
@@ -137,7 +138,7 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         cases = (
             ("list_images", (), "GET", "/api/v1/images"),
             ("inspect", ("lab1",), "GET", "/api/v1/labs/lab1"),
-            ("destroy", ("lab1",), "DELETE", "/api/v1/labs/lab1"),
+            ("destroy", ("lab1",), "DELETE", "/api/v1/labs/lab1?cleanup=false&timeout=300s"),
         )
         for method_name, args, method, path in cases:
             with self.subTest(method=method_name):
@@ -174,6 +175,22 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
                 self.assertEqual(
                     self.sent_requests()[-1].url, f"{HOST_URL}/api/v1/labs?reconfigure=false&timeout={query}"
                 )
+                self.assertEqual(self.send.call_args.kwargs["timeout"], (10, read_timeout))
+
+    def test_destroy_sends_cleanup_and_timeout_and_waits_for_the_server(self):
+        cases = (
+            ({"cleanup": True}, 300, "cleanup=true&timeout=300s", 780),
+            ({}, 300, "cleanup=false&timeout=300s", 780),
+            ({}, 9000, "cleanup=false&timeout=7200s", 7680),
+        )
+        for kwargs, request_timeout, query, read_timeout in cases:
+            with self.subTest(kwargs=kwargs, request_timeout=request_timeout):
+                self.send.return_value = fake_response(200, {})
+                with override_settings(PLUGINS_CONFIG={clab_client.APP_NAME: {"request_timeout": request_timeout}}):
+                    self.logged_in_client().destroy("lab1", **kwargs)
+                request = self.sent_requests()[-1]
+                self.assertEqual(request.method, "DELETE")
+                self.assertEqual(request.url, f"{HOST_URL}/api/v1/labs/lab1?{query}")
                 self.assertEqual(self.send.call_args.kwargs["timeout"], (10, read_timeout))
 
     def test_deploy_with_bad_topology_raises_error_before_request(self):
@@ -304,6 +321,26 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertIn("The lab state is unknown", error.message)
         self.assertIsNone(error.__cause__)
         self.assertIsNone(error.__context__)
+
+    def test_connection_closed_after_send_is_timed_out(self):
+        self.send.side_effect = requests.ConnectionError(ProtocolError("Connection aborted."))
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().destroy("lab1")
+        error = context.exception
+        self.assertTrue(error.timed_out)
+        self.assertIsNone(error.status_code)
+        self.assertEqual(
+            error.message,
+            f"Host {HOST_NAME}: DELETE /api/v1/labs/lab1 was sent, but the connection closed before a response came. "
+            "The lab state is unknown.",
+        )
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+        self.send.side_effect = requests.ConnectionError(NewConnectionError(None, "Connection refused"))
+        with self.assertRaises(ClabApiError) as context:
+            self.logged_in_client().destroy("lab1")
+        self.assertFalse(context.exception.timed_out)
+        self.assertIn("cannot reach", context.exception.message)
 
     def test_requests_use_verify_ssl_of_host(self):
         for verify_ssl in (True, False):
