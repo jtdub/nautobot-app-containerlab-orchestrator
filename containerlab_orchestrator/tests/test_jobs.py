@@ -14,12 +14,18 @@ from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.clab_client import ClabApiError
 from containerlab_orchestrator.constants import APP_NAME
-from containerlab_orchestrator.deploy import INSPECT_WARNING, MISSING_IMAGES_MESSAGE, TIME_LIMIT_MESSAGE
+from containerlab_orchestrator.deploy import (
+    INSPECT_WARNING,
+    MISSING_IMAGES_MESSAGE,
+    TIME_LIMIT_MESSAGE,
+    DeployTimeLimit,
+)
 from containerlab_orchestrator.jobs import (
     DEPLOY_SUMMARY,
     NO_CHANGE_MESSAGE,
     NO_VIEW_MESSAGE,
     NOT_OWNER_MESSAGE,
+    REPLACE_HELP,
     SUMMARY_MESSAGE,
     DeployLab,
 )
@@ -257,6 +263,7 @@ class DeployLabJobTestCase(TransactionTestCase):
         replace_field = DeployLab.replace_existing.as_field()
         self.assertEqual(replace_field.label, "Replace a lab that exists on the host")
         self.assertFalse(replace_field.initial)
+        self.assertEqual(replace_field.help_text, REPLACE_HELP)
 
     def test_owner_deploy_succeeds_with_summary(self):
         job_result = self.run_deploy("alice")
@@ -280,6 +287,11 @@ class DeployLabJobTestCase(TransactionTestCase):
 
     def test_non_owner_fails(self):
         job_result = self.run_deploy("bob")
+        self.assert_access_failed_with(job_result, NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="deploy"))
+
+    def test_non_owner_without_change_permission_gets_the_owner_message(self):
+        grant_permission(get_user_model().objects.create_user(username="dave"), Lab, "view")
+        job_result = self.run_deploy("dave")
         self.assert_access_failed_with(job_result, NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="deploy"))
 
     def test_user_who_cannot_view_the_lab_gets_a_message_with_no_name(self):
@@ -356,4 +368,5 @@ class DeployLabJobTestCase(TransactionTestCase):
         self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
         failures = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
         self.assertIn(TIME_LIMIT_MESSAGE.format(lab=self.lab_a), failures)
+        self.assertIn(DeployTimeLimit.__name__, job_result.traceback or "")
         self.assertEqual(self.status_of(), LabStatusChoices.FAILED)

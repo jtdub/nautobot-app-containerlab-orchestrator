@@ -175,14 +175,15 @@ write the full image name in the node mapping, or pull the image with the exact 
 | The lab is deleted during the deploy. | None. The lab can still run on the host. |
 
 A 409 means that the host already has a lab of this name, or that another operation of the lab runs. The job does
-not replace the lab. Wait for the other operation, or use the option "Replace a lab that exists on the host".
+not replace the lab. Wait for the other operation, then run the job again.
 
 !!! warning
-    This option removes the containers and the lab directory of the lab of that name on the host, also a lab that
-    Nautobot did not deploy. A change that you made in the running lab is lost. Make sure that the lab on the host is
-    yours before you select it.
+    The option "Replace a lab that exists on the host" removes the containers and the lab directory of the lab of
+    that name on the host, also a lab that Nautobot did not deploy. A change that you made in the running lab is lost.
+    Make sure that the lab on the host is yours before you select it.
 
-The option is off by default. With the option on, the job sends `reconfigure=true` to the host.
+To replace the lab on the host, select the option "Replace a lab that exists on the host". The option is off by
+default. With the option on, the job sends `reconfigure=true` to the host.
 
 #### The job log of a deploy
 
