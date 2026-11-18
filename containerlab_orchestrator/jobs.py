@@ -6,8 +6,9 @@ from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.deploy import TIME_LIMIT_MESSAGE, DeployTimeLimit, deploy_lab
-from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, destroy_lab
+from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, DestroyTimeLimit, destroy_lab
 from containerlab_orchestrator.models import Lab
+from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE, redeploy_lab
 
 name = "Containerlab Orchestrator"  # pylint: disable=invalid-name
 
@@ -40,6 +41,9 @@ KEEP_DIRECTORY_HELP = (
     "config. Only a later Deploy Lab job with the replace option off uses it again."
 )
 """The help text of the option that keeps the lab directory on the host."""
+
+REDEPLOY_SUMMARY = "Redeployed lab {lab} on host {host}: {nodes} nodes, {states} node states, {warnings} warnings."
+"""The success line of a redeploy."""
 
 
 def lab_access_message(lab, user, verb):
@@ -218,5 +222,61 @@ class DestroyLab(Job):
         return {"nodes": result.node_count, "warnings": len(result.warnings)}
 
 
-jobs = [BuildLabTopology, DeployLab, DestroyLab]
+class RedeployLab(Job):
+    """Destroy the lab of a Deployed or Failed lab on its host, then deploy the stored topology again."""
+
+    lab = ObjectVar(model=Lab, description="The lab to redeploy.")
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """Job metadata."""
+
+        name = "Redeploy Lab"
+        description = (
+            "WARNING: This deletes the containers and the lab directory of the lab of this name on the host, also a "
+            "lab that Nautobot did not deploy. Each change in the running lab is lost. Deploy the stored topology of a "
+            "Deployed or Failed lab again."
+        )
+        has_sensitive_variables = False
+        soft_time_limit = 2600
+        time_limit = 2700
+
+    def run(self, lab):  # pylint: disable=arguments-differ
+        """Check the access of the job user, redeploy the lab, and log the warnings and a summary.
+
+        Returns:
+            The node, node state, and warning counts of the redeploy, or None if the redeploy failed.
+
+        Raises:
+            DestroyTimeLimit: If the Celery soft time limit stopped the destroy call.
+            DeployTimeLimit: If the Celery soft time limit stopped the deploy call after the destroy.
+        """
+        if fail_access(self, lab, "redeploy"):
+            return None
+        try:
+            result = redeploy_lab(lab)
+        except ValidationError as error:
+            for line in error_lines(error):
+                self.fail(line, extra={"object": lab})
+            return None
+        except DestroyTimeLimit:
+            self.fail(DESTROY_TIME_LIMIT_MESSAGE.format(lab=lab), extra={"object": lab})
+            raise
+        except DeployTimeLimit:
+            self.fail(TIME_LIMIT_MESSAGE.format(lab=lab), extra={"object": lab})
+            self.fail(HALF_DONE_MESSAGE.format(lab=lab, host=lab.host), extra={"object": lab})
+            raise
+        for warning in result.warnings:
+            self.logger.warning(warning, extra={"object": result.lab})
+        summary = REDEPLOY_SUMMARY.format(
+            lab=result.lab,
+            host=result.lab.host,
+            nodes=result.node_count,
+            states=result.state_count,
+            warnings=len(result.warnings),
+        )
+        self.logger.success(summary, extra={"object": result.lab})
+        return {"nodes": result.node_count, "states": result.state_count, "warnings": len(result.warnings)}
+
+
+jobs = [BuildLabTopology, DeployLab, RedeployLab, DestroyLab]
 register_jobs(*jobs)

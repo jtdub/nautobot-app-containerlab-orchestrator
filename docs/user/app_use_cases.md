@@ -348,6 +348,131 @@ The Deploy Lab rule also covers Destroy Lab: set the soft time limit to 4 x `req
 limit to 100 seconds more. A host runs one containerlab operation at a time. On a busy host, the destroy call can
 wait for the other operations and give a read timeout. Then the lab becomes Failed.
 
+### Redeploy a lab
+
+The Redeploy Lab job removes the lab of a Deployed or Failed lab from its containerlab host, with its lab directory.
+Then it deploys the stored topology YAML of the lab again. It sets the lab status, and it writes the state and the
+container ID of each node row.
+
+#### Turn on the job
+
+Nautobot adds the job turned off. An administrator does these steps one time:
+
+1. Open Jobs > Jobs, and edit the job "Redeploy Lab" in the group "Containerlab Orchestrator".
+2. Select "Enabled", and save the job.
+3. Give each user who redeploys labs the permissions in the table below.
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The user selects the lab, and the job checks it. |
+| `containerlab_orchestrator.change_lab` | The job checks it before the redeploy. |
+| `containerlab_orchestrator.view_labnode` | The user sees the node state on the lab page. |
+
+The user must also be the owner of the lab, or a superuser. The job reads the host credentials from the Secrets Group
+of the host, so the user needs no permission on secrets.
+
+#### Before you use the job in production
+
+The job has no test on a live clab-api-server yet. All its tests use a mocked host. An administrator does this check
+one time for each host:
+
+1. Deploy the lab of two `linux` nodes of the Deploy Lab check. Run Redeploy Lab. Make sure that the lab is Deployed,
+   and that the two node rows have new container IDs.
+2. Remove the lab on the host with `containerlab destroy`. Run Redeploy Lab. Make sure that the job succeeds with the
+   warning `Host <host> has no lab named <lab>.`.
+
+#### Who can redeploy a lab
+
+The job checks the job user in this order. The first check that fails stops the job. The lab does not change, and
+the job makes no call to the host.
+
+| Check | Message |
+|---|---|
+| The user can view the lab. | `You cannot redeploy this lab.` The message does not name the lab. |
+| The user is the owner of the lab, or a superuser. | `Only the owner of lab <lab> or a superuser can redeploy it.` |
+| The user has the change permission on the lab. | `You need the change permission on lab <lab> to redeploy it.` |
+
+A lab with no owner can get a redeploy from a superuser only.
+
+#### Before the redeploy
+
+Only a Deployed or Failed lab with a stored topology YAML can redeploy. A Planned, Built, or Destroyed lab stops the
+job with `Lab <lab> is <status>. Only a Deployed or Failed lab can redeploy.` For a Built or Destroyed lab, run Deploy
+Lab. Labs must be able to have the Deployed, Failed, and Destroyed statuses.
+
+Before it removes the lab, the job reads the image list of the host. If the host does not have the image of a node,
+the job stops, and the lab does not change. The image rules of "Before the deploy" apply.
+
+The job deploys the topology YAML that the lab has when the job starts. If a build writes a new topology during the
+job, the job log gives a warning. Then run Redeploy Lab again.
+
+#### What a redeploy removes
+
+!!! warning ""
+    WARNING: This deletes the containers and the lab directory of the lab of this name on the host, also a lab that
+    Nautobot did not deploy. Each change in the running lab is lost. Make sure that the lab on the host is yours
+    before you run the job.
+
+The job always removes the lab directory `clab-<lab>`. So these items are lost:
+
+- The saved configs of the nodes.
+- The NVRAM file of each `cisco_iol` node.
+- The saved config of each `nokia_sros` node.
+- The TLS files of the nodes.
+
+The job also removes each other item of "What the job removes on the host" of Destroy Lab: the containers, the tool
+containers, the management network, the `/etc/hosts` entries, the SSH config, the network namespace links, and the
+staged restore snapshots. The host finds the lab by its name. If the server account of the host is a clab-api-server
+superuser, or if it made a lab of that name by hand, the job removes that lab.
+
+#### How a redeploy runs
+
+The job does these steps:
+
+1. It checks the images on the host. A missing image stops the job before any change.
+2. It removes the lab on the host. The destroy rules of "What a destroy changes" apply. A failure stops the job
+   before the deploy.
+3. It deploys the stored topology YAML. The deploy rules of "What a deploy changes" apply, from the Destroyed status.
+4. It reads the node state, and it sets Deployed.
+
+| Result | Lab status |
+|---|---|
+| The deploy call returns. | Deployed. Each node row gets the new state and container ID from the host. |
+| The host has no lab of that name at the destroy. | Deployed, with a warning. |
+| A check, the image list call, a missing image, or the soft time limit stops the job before the destroy call. | No change. |
+| The destroy call fails, or the soft time limit stops it. | As for a destroy. The job does not deploy. |
+| The deploy call gives HTTP 500 or more, a read timeout, a closed connection, or a response that the job cannot read. | Failed. |
+| The deploy call gives HTTP 409, another HTTP error, or a connection error. | Destroyed. |
+| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. |
+| The inspect call fails. | Deployed. The node rows get empty values, and the job log gives a warning. |
+
+When the deploy call fails after the destroy, the job log adds this line:
+
+`The job removed lab <lab> from host <host> before the deploy failed. Run Deploy Lab after you fix the cause.`
+
+A redeploy ends with one summary line:
+
+`Redeployed lab <lab> on host <host>: <nodes> nodes, <states> node states, <warnings> warnings.`
+
+The job result holds only these counts. The rules of "The job log of a deploy" also apply.
+
+#### Time limits
+
+The job has a soft time limit of 2600 seconds and a hard time limit of 2700 seconds. The job makes five calls to the
+host. With the default `request_timeout` of 300 seconds, the calls take up to 2390 seconds:
+
+- Login, image list, and inspect: 3 x (10 + 300) = 930 seconds.
+- Destroy: 790 seconds, as for Destroy Lab.
+- Deploy: 670 seconds, as for Deploy Lab.
+
+The rest is for the database work. If you set a larger `request_timeout`, set the soft time limit to 5 x
+`request_timeout` + 1100, and the hard time limit to 100 seconds more. The host gets a containerlab timeout of 7200
+seconds or less. Change the limits on the edit page of the job.
+
 ### Startup configs
 
 The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
@@ -463,7 +588,13 @@ to the default config of the kind.
 #### Redeploy
 
 The builder writes `enforce-startup-config: true` on each node with a startup config. So a deploy of a new build
-writes the new config, and a redeploy removes a change that you make in the running lab. There are two exceptions:
+writes the new config, and a redeploy removes a change that you make in the running lab.
+
+Redeploy Lab and the option "Replace a lab that exists on the host" of Deploy Lab remove the lab directory. So a
+`cisco_iol` node gets a new NVRAM file, and a `nokia_sros` node gets the new partial config.
+
+There are two exceptions. They apply only to a Deploy Lab job with the replace option off, after a Destroy Lab job
+with "Keep the lab directory" on:
 
 - A `cisco_iol` node keeps its NVRAM file when it exists, so it boots with its saved config.
 - A `nokia_sros` node applies the partial config only when the lab directory has no saved config.
