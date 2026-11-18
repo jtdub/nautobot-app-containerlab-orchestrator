@@ -312,11 +312,12 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
             {"name": 5, "nodeName": "old2"},
             {"name": None},
             {"name": "clab-build-lab-old1", "nodeName": "old1"},
+            {"name": "z" * 300, "nodeName": "old3"},
             "not a container",
             *self.client_mock.inspect.return_value,
         ]
         result = deploy_lab(self.lab)
-        names = "?, clab-build-lab-old1, clab-build-lab-sshx, old2"
+        names = "?, clab-build-lab-old1, clab-build-lab-sshx, old2, " + "z" * 255
         self.assertEqual(
             result.warnings, [UNKNOWN_CONTAINERS_WARNING.format(host=self.lab.host, lab=self.lab, names=names)]
         )
@@ -324,13 +325,15 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         self.assertEqual(self._addresses(), PLANNED_ADDRESSES)
 
     def test_failed_inspect_writes_no_result(self):
-        for case, response in (("error", api_error(500)), ("not a list", [{"build-lab": []}])):
+        cases = (("error", api_error(500), {}), ("not a list", [{"build-lab": []}], {}), ("empty list", [[]], []))
+        for case, response, last_inspect in cases:
             with self.subTest(case=case):
                 self._set_status(LabStatusChoices.BUILT)
                 self._seed_old_inspect()
                 self.client_mock.inspect.side_effect = response
                 deploy_lab(self.lab)
-                self.assertEqual(self._lab().last_inspect, {})
+                lab = self._lab()
+                self.assertEqual((lab.last_inspect, lab.status.name), (last_inspect, LabStatusChoices.DEPLOYED))
                 self.assertEqual(self._addresses(), PLANNED_ADDRESSES)
 
     def test_new_build_keeps_the_new_addresses(self):
@@ -340,8 +343,9 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
             return {}
 
         self.client_mock.deploy.side_effect = build_during_deploy
+        self.client_mock.inspect.return_value[0]["ipv4_address"] = "172.20.30.80/24"
         result = deploy_lab(self.lab)
-        self.assertEqual(set(self._addresses().values()), {"172.20.30.70"})
+        self.assertEqual(self._addresses(), {"arista1": "172.20.30.80", "leaf1": "172.20.30.70"})
         self.assertEqual(result.warnings, [NEW_BUILD_WARNING.format(lab=self.lab)])
 
     def test_status_writes_are_narrow(self):
