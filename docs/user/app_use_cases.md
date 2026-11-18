@@ -93,7 +93,7 @@ A successful build ends with one summary line. The job result holds only the nod
 ### Deploy a lab
 
 The Deploy Lab job deploys the stored topology YAML of a lab to the containerlab host of the lab. It sets the lab
-status, and it writes the state and the container ID of each node row.
+status, and it writes the state, the container ID, and the management address of each node row.
 
 #### Turn on the job
 
@@ -165,14 +165,17 @@ write the full image name in the node mapping, or pull the image with the exact 
 
 | Result | Lab status |
 |---|---|
-| The deploy call returns. | Deployed. Each node row gets the state and the container ID from the host. A row with no container gets empty values. |
-| The inspect call fails, or the soft time limit stops it. | Deployed. The node rows get empty values. A failed inspect call gives a warning. |
-| The deploy call gives HTTP 500 or more, or a read timeout. | Failed. After a read timeout, the lab state on the host is unknown. |
+| The deploy call returns. | Deployed. Each node row gets the state, the container ID, and the management address from the host. A row with no container gets an empty state and container ID, and the address of the build. The stored inspect result gets the container list. |
+| The inspect call fails, or the soft time limit stops it. | Deployed. The node rows get an empty state and container ID, and the address of the build. The stored inspect result gets `{}`. A failed inspect call gives a warning. |
+| The deploy call gives HTTP 500 or more, or a read timeout. | Failed. After a read timeout, the lab state on the host is unknown. The stored inspect result gets `{}`. |
 | The deploy call gives HTTP 409, another HTTP error, or a connection error. | No change. |
 | A check, the image list call, a missing image, or the soft time limit stops the job before the deploy call. | No change. |
-| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. |
+| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
 | The hard time limit stops the job. | No change. The lab can run on the host. A next run gets HTTP 409. |
 | The lab is deleted during the deploy. | None. The lab can still run on the host. |
+
+A container with no node row gives a warning. A tool container, such as SSHX or GoTTY, is one. A management address
+that is not the address of the build gives a warning.
 
 A 409 means that the host already has a lab of this name, or that another operation of the lab runs. The job does
 not replace the lab. Wait for the other operation, then run the job again.
@@ -305,15 +308,15 @@ Lab removes it.
 
 | Result | Lab status |
 |---|---|
-| The destroy call returns. | Destroyed. Each node row gets an empty state and an empty container ID. |
+| The destroy call returns. | Destroyed. Each node row gets an empty state and an empty container ID. The stored inspect result gets an empty list. |
 | The host has no lab of that name. | Destroyed, with a warning. |
 | Another user of the host owns a lab of that name. | No change. Check the Secrets Group of the host. |
 | The destroy call gives another HTTP 404. | No change. |
-| The destroy call gives HTTP 500 or more, a read timeout, or a closed connection. | Failed. The lab state on the host is unknown. |
+| The destroy call gives HTTP 500 or more, a read timeout, or a closed connection. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
 | The destroy call gives HTTP 409. | No change. Another operation of the lab runs. Wait for it to end, then run the job again. |
 | The destroy call gives HTTP 400, 401, or 403, or the host cannot be reached. | No change. |
 | A check, the login, or the soft time limit stops the job before the destroy call. | No change. |
-| The soft time limit stops the destroy call. | Failed. The lab state on the host is unknown. |
+| The soft time limit stops the destroy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
 | The soft time limit stops the job after the destroy call. | No change. The host no longer has the lab, but the job log says that the state is unknown. |
 | The status of the lab changes during the job. | No change. The job writes nothing. The job log tells if the host still has the lab. |
 | The lab is deleted during the job. | The lab row is gone. The job log tells if the host still has the lab. |
@@ -351,8 +354,8 @@ wait for the other operations and give a read timeout. Then the lab becomes Fail
 ### Redeploy a lab
 
 The Redeploy Lab job removes the lab of a Deployed or Failed lab from its containerlab host, with its lab directory.
-Then it deploys the stored topology YAML of the lab again. It sets the lab status, and it writes the state and the
-container ID of each node row.
+Then it deploys the stored topology YAML of the lab again. It sets the lab status, and it writes the state, the
+container ID, and the management address of each node row.
 
 #### Turn on the job
 
@@ -441,14 +444,14 @@ The job does these steps:
 
 | Result | Lab status |
 |---|---|
-| The deploy call returns. | Deployed. Each node row gets the new state and container ID from the host. |
+| The deploy call returns. | Deployed. Each node row gets the new state, container ID, and management address from the host. The stored inspect result gets the container list. |
 | The host has no lab of that name at the destroy. | Deployed, with a warning. |
 | A check, the image list call, a missing image, or the soft time limit stops the job before the destroy call. | No change. |
 | The destroy call fails, or the soft time limit stops it. | As for a destroy. The job does not deploy. |
-| The deploy call gives HTTP 500 or more, a read timeout, a closed connection, or a response that the job cannot read. | Failed. |
+| The deploy call gives HTTP 500 or more, a read timeout, a closed connection, or a response that the job cannot read. | Failed. The stored inspect result gets `{}`. |
 | The deploy call gives HTTP 409, another HTTP error, or a connection error. | Destroyed. |
-| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. |
-| The inspect call fails. | Deployed. The node rows get empty values, and the job log gives a warning. |
+| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
+| The inspect call fails. | Deployed. The node rows get an empty state and container ID, and the address of the build. The stored inspect result gets `{}`. The job log gives a warning. |
 
 When the deploy call fails after the destroy, the job log adds this line:
 
