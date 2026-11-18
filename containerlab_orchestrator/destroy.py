@@ -159,6 +159,8 @@ def _destroy_error(lab, statuses, error):
 def _write_destroyed(lab, destroyed):
     """Clear the node state of each row and set the Destroyed status in one transaction.
 
+    It writes an empty container list to the stored inspect result.
+
     Returns:
         The saved lab, and the count of node rows.
 
@@ -175,5 +177,6 @@ def _write_destroyed(lab, destroyed):
             row.container_id = ""
         LabNode.objects.bulk_update(rows, ["state", "container_id"])
         locked.status = destroyed
-        locked.save(update_fields=["status", "last_updated"])
+        locked.last_inspect = []
+        locked.save(update_fields=["status", "last_inspect", "last_updated"])
     return locked, len(rows)

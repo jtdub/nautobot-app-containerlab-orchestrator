@@ -27,7 +27,7 @@ from containerlab_orchestrator.destroy import (
 )
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.tests.test_build import BuildLabTestCase
-from containerlab_orchestrator.tests.test_deploy import LOCKED_LAB_READ
+from containerlab_orchestrator.tests.test_deploy import LOCKED_LAB_READ, OLD_ADDRESS, OLD_INSPECT
 
 DESTROY_PATH = "DELETE /api/v1/labs/build-lab"
 RUNNING_NODES = {"arista1": ("running", "id-arista1"), "leaf1": ("running", "id-leaf1")}
@@ -101,10 +101,14 @@ class DestroyLabResultTestCase(DestroyLabTestCase):  # pylint: disable=too-many-
     """Test the status, the node state, the warnings, and the client calls of a destroy that succeeds."""
 
     def test_destroy_sets_destroyed_and_clears_node_state(self):
+        Lab.objects.filter(pk=self.lab.pk).update(last_inspect=OLD_INSPECT)
+        LabNode.objects.filter(lab=self.lab).update(mgmt_ipv4=OLD_ADDRESS)
         result = destroy_lab(self.lab)
         lab = self._lab()
         self.assertEqual(lab.status.name, LabStatusChoices.DESTROYED)
         self.assertEqual(self._node_state(), CLEARED_NODES)
+        self.assertEqual(lab.last_inspect, [])
+        self.assertEqual({row.mgmt_ipv4 for row in self._rows().values()}, {OLD_ADDRESS})
         self.assertEqual((result.lab, result.node_count, result.warnings), (lab, 2, []))
         self.client_class.assert_called_once_with(lab.host)
         self.assertEqual(
@@ -147,17 +151,19 @@ class DestroyLabResultTestCase(DestroyLabTestCase):  # pylint: disable=too-many-
         self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
 
     def test_status_writes_are_narrow_and_lock_the_row(self):
-        for status, error in ((LabStatusChoices.DESTROYED, None), (LabStatusChoices.FAILED, destroy_error(500))):
+        cases = ((LabStatusChoices.DESTROYED, None, []), (LabStatusChoices.FAILED, destroy_error(500), {}))
+        for status, error, last_inspect in cases:
             with self.subTest(status=status):
                 self._set_status(LabStatusChoices.DEPLOYED)
+                Lab.objects.filter(pk=self.lab.pk).update(last_inspect=OLD_INSPECT)
                 start = self._lab().last_updated
                 self.client_mock.destroy.side_effect = error
                 with mock.patch.object(Lab, "save", autospec=True, side_effect=Lab.save) as save:
                     with CaptureQueriesContext(connection) as queries:
                         self._destroy_quietly()
-                self.assertEqual(self._lab().status.name, status)
+                self.assertEqual((self._lab().status.name, self._lab().last_inspect), (status, last_inspect))
                 self.assertEqual(save.call_count, 1)
-                self.assertEqual(save.call_args.kwargs, {"update_fields": ["status", "last_updated"]})
+                self.assertEqual(save.call_args.kwargs, {"update_fields": ["status", "last_inspect", "last_updated"]})
                 self.assertGreater(self._lab().last_updated, start)
                 self.assertTrue(any(LOCKED_LAB_READ.search(query["sql"]) for query in queries.captured_queries))
 
