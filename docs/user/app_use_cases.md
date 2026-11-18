@@ -213,6 +213,141 @@ The job does not support a c9s (Kubernetes) host. The image list of a c9s host g
 the deploy call. The containerlab default timeout for c9s is 10 minutes, so a c9s host also needs a `request_timeout` of
 600 or more.
 
+### Destroy a lab
+
+The Destroy Lab job removes the lab of a Deployed or Failed lab from its containerlab host. It sets the Destroyed
+status, and it clears the state and the container ID of each node row.
+
+#### Turn on the job
+
+Nautobot adds the job turned off. An administrator does these steps one time:
+
+1. Open Jobs > Jobs, and edit the job "Destroy Lab" in the group "Containerlab Orchestrator".
+2. Select "Enabled", and save the job.
+3. Give each user who destroys labs the permissions in the table below.
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The user selects the lab, and the job checks it. |
+| `containerlab_orchestrator.change_lab` | The job checks it before the destroy. |
+| `containerlab_orchestrator.view_labnode` | The user sees the cleared node state on the lab page. |
+
+The user must also be the owner of the lab, or a superuser. The job reads the host credentials from the Secrets Group
+of the host, so the user needs no permission on secrets.
+
+#### Before you use the job in production
+
+The job has no test on a live clab-api-server yet. All its tests use a mocked host. An administrator does this check
+one time for each host:
+
+1. Deploy the lab of two `linux` nodes of the Deploy Lab check. Run Destroy Lab. Make sure that the lab is Destroyed,
+   and that the two node rows have no state and no container ID.
+2. Run Destroy Lab again. Make sure that the job stops with `Lab <lab> is Destroyed. Only a Deployed or Failed lab can
+   destroy.`
+3. Deploy the lab again, and remove it on the host with `containerlab destroy`. Run Destroy Lab. Make sure that the
+   job succeeds with the warning `Host <host> has no lab named <lab>.`.
+
+#### Who can destroy a lab
+
+The job checks the job user in this order. The first check that fails stops the job. The lab does not change, and
+the job makes no call to the host.
+
+| Check | Message |
+|---|---|
+| The user can view the lab. | `You cannot destroy this lab.` The message does not name the lab. |
+| The user is the owner of the lab, or a superuser. | `Only the owner of lab <lab> or a superuser can destroy it.` |
+| The user has the change permission on the lab. | `You need the change permission on lab <lab> to destroy it.` |
+
+A lab with no owner can get a destroy from a superuser only.
+
+#### What the job removes on the host
+
+!!! warning ""
+    WARNING: This deletes the containers of the lab of this name on the host, also a lab that Nautobot did not
+    deploy. Make sure that the lab on the host is yours before you run the job.
+
+The job sends the lab name to the host. The host removes these items of the lab:
+
+- Each container of the lab.
+- The tool containers of the lab: SSHX, GoTTY, and Tailscale.
+- The management network of the lab.
+- The `/etc/hosts` entries and the SSH config of the lab.
+- The network namespace links of the lab.
+- The staged restore snapshots of the lab.
+- The lab directory `clab-<lab>`, unless "Keep the lab directory" is on.
+
+The host finds the lab by its name. So the job also removes these labs:
+
+- A lab of that name that the server account of the host made by hand.
+- A shared lab of that name.
+- Each lab of that name, if the server account is a clab-api-server superuser.
+
+Two host records with the same server URL share one set of labs. A destroy from one record removes the lab of the
+other record.
+
+The job does not remove the images or the topology file on the host. If the host has no lab of that name, or another
+user of the host owns it, the job removes nothing.
+
+#### Keep the lab directory
+
+The lab directory holds the saved configs, the `cisco_iol` NVRAM file, the `nokia_sros` saved config, and the TLS
+files of the nodes. Select "Keep the lab directory" to keep it on the host. The option is off by default. With the
+option on, the job sends `cleanup=false` to the host.
+
+Only a later Deploy Lab job with the replace option off uses the kept directory again. The replace option of Deploy
+Lab removes it.
+
+#### What a destroy changes
+
+| Result | Lab status |
+|---|---|
+| The destroy call returns. | Destroyed. Each node row gets an empty state and an empty container ID. |
+| The host has no lab of that name. | Destroyed, with a warning. |
+| Another user of the host owns a lab of that name. | No change. Check the Secrets Group of the host. |
+| The destroy call gives another HTTP 404. | No change. |
+| The destroy call gives HTTP 500 or more, a read timeout, or a closed connection. | Failed. The lab state on the host is unknown. |
+| The destroy call gives HTTP 409. | No change. Another operation of the lab runs. Wait for it to end, then run the job again. |
+| The destroy call gives HTTP 400, 401, or 403, or the host cannot be reached. | No change. |
+| A check, the login, or the soft time limit stops the job before the destroy call. | No change. |
+| The soft time limit stops the destroy call. | Failed. The lab state on the host is unknown. |
+| The soft time limit stops the job after the destroy call. | No change. The host no longer has the lab, but the job log says that the state is unknown. |
+| The status of the lab changes during the job. | No change. The job writes nothing. The job log tells if the host still has the lab. |
+| The lab is deleted during the job. | The lab row is gone. The job log tells if the host still has the lab. |
+
+When the status changes or the lab is deleted during the job, the job log tells the state of the host:
+
+- `Host <host> no longer has lab <lab>.` The destroy call removed the lab, or the host had no lab of that name.
+- `The lab can still run on host <host>.` The lab was deleted, and the destroy call failed with a host error.
+- `Lab <lab> changed its status during the destroy, so the job did not set Failed.` The status changed, and the
+  destroy call failed with a host error. The lab can still run on the host.
+
+A container that the host cannot delete gives HTTP 500, so the lab becomes Failed. The host can also give HTTP 500
+after a full destroy. Then the next Destroy Lab job finds no lab on the host, and sets Destroyed.
+
+#### The job log of a destroy
+
+A destroy ends with one summary line, with the count of cleared node rows and the warning count. The job result holds
+only these counts. The job writes no secret, no topology YAML, and no startup config text of its own into the job
+log. For an error of the host, the job log holds up to 500 characters of the error text. The deploy rules of "The job
+log of a deploy" also apply.
+
+#### Time limits
+
+The job has a soft time limit of 1800 seconds and a hard time limit of 1900 seconds. The job makes two calls to the
+host: login and destroy. With the default `request_timeout` of 300 seconds, the calls take up to 1100 seconds:
+
+- Login: 10 + 300 = 310 seconds.
+- Destroy: 10 + 300 + 300 + 120 + 60 = 790 seconds. The host gives containerlab 300 seconds, and adds a margin of 300
+  seconds. The owner check of the host takes up to 120 seconds more. The job waits 60 seconds more for the response.
+
+The Deploy Lab rule also covers Destroy Lab: set the soft time limit to 4 x `request_timeout` + 600, and the hard time
+limit to 100 seconds more. A host runs one containerlab operation at a time. On a busy host, the destroy call can
+wait for the other operations and give a read timeout. Then the lab becomes Failed.
+
 ### Startup configs
 
 The topology builder can give each lab node a startup config from Nautobot data. The topology builder makes the
