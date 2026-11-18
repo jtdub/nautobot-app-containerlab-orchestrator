@@ -246,10 +246,10 @@ one time for each host:
 
 1. Deploy the lab of two `linux` nodes of the Deploy Lab check. Run Destroy Lab. Make sure that the lab is Destroyed,
    and that the two node rows have no state and no container ID.
-2. Run Destroy Lab again. Make sure that the job stops with "Lab <lab> is Destroyed. Only a Deployed or Failed lab can
-   destroy.".
+2. Run Destroy Lab again. Make sure that the job stops with `Lab <lab> is Destroyed. Only a Deployed or Failed lab can
+   destroy.`
 3. Deploy the lab again, and remove it on the host with `containerlab destroy`. Run Destroy Lab. Make sure that the
-   job succeeds with the warning "Host <host> has no lab named <lab>.".
+   job succeeds with the warning `Host <host> has no lab named <lab>.`.
 
 #### Who can destroy a lab
 
@@ -258,9 +258,9 @@ the job makes no call to the host.
 
 | Check | Message |
 |---|---|
-| The user can view the lab. | "You cannot destroy this lab." The message does not name the lab. |
-| The user is the owner of the lab, or a superuser. | "Only the owner of lab <lab> or a superuser can destroy it." |
-| The user has the change permission on the lab. | "You need the change permission on lab <lab> to destroy it." |
+| The user can view the lab. | `You cannot destroy this lab.` The message does not name the lab. |
+| The user is the owner of the lab, or a superuser. | `Only the owner of lab <lab> or a superuser can destroy it.` |
+| The user has the change permission on the lab. | `You need the change permission on lab <lab> to destroy it.` |
 
 A lab with no owner can get a destroy from a superuser only.
 
@@ -320,9 +320,9 @@ Lab removes it.
 
 When the status changes or the lab is deleted during the job, the job log tells the state of the host:
 
-- "Host <host> no longer has lab <lab>." The destroy call removed the lab, or the host had no lab of that name.
-- "The lab can still run on host <host>." The lab was deleted, and the destroy call failed with a host error.
-- "Lab <lab> changed its status during the destroy, so the job did not set Failed." The status changed, and the
+- `Host <host> no longer has lab <lab>.` The destroy call removed the lab, or the host had no lab of that name.
+- `The lab can still run on host <host>.` The lab was deleted, and the destroy call failed with a host error.
+- `Lab <lab> changed its status during the destroy, so the job did not set Failed.` The status changed, and the
   destroy call failed with a host error. The lab can still run on the host.
 
 A container that the host cannot delete gives HTTP 500, so the lab becomes Failed. The host can also give HTTP 500
