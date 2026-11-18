@@ -95,6 +95,7 @@ class RedeployLabTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancest
                 self.assertEqual(lab.status.name, LabStatusChoices.DEPLOYED)
                 self.assertEqual(self._node_state(), NEW_NODE_STATE)
                 self.assertEqual((result.lab, result.node_count, result.state_count, result.warnings), (lab, 2, 2, []))
+                self.assertEqual(result.lab.status.name, LabStatusChoices.DEPLOYED)
         with self.subTest(case="counts"):
             self._reset()
             LabNode.objects.create(lab=self.lab, node_name="gone1", kind="linux", image="alpine", state="running")
