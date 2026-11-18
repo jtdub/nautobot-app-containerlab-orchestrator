@@ -27,7 +27,7 @@ from containerlab_orchestrator.destroy import (
 )
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE, REDEPLOY_STATUS_MESSAGE, redeploy_lab
-from containerlab_orchestrator.tests.test_deploy import DeployLabTestCase, api_error
+from containerlab_orchestrator.tests.test_deploy import OLD_INSPECT, DeployLabTestCase, api_error
 from containerlab_orchestrator.tests.test_destroy import destroy_error, plain_not_found
 
 NEW_NODE_STATE = {"arista1": ("running", "id-arista1"), "leaf1": ("running", "id-leaf1")}
@@ -91,10 +91,12 @@ class RedeployLabTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancest
         for status in (LabStatusChoices.DEPLOYED, LabStatusChoices.FAILED):
             with self.subTest(status=status):
                 self._reset(status)
+                Lab.objects.filter(pk=self.lab.pk).update(last_inspect=OLD_INSPECT)
                 result = redeploy_lab(self.lab)
                 lab = self._lab()
                 self.assertEqual(lab.status.name, LabStatusChoices.DEPLOYED)
                 self.assertEqual(self._node_state(), NEW_NODE_STATE)
+                self.assertEqual(lab.last_inspect, self.client_mock.inspect.return_value)
                 self.assertEqual((result.lab, result.node_count, result.state_count, result.warnings), (lab, 2, 2, []))
                 self.assertEqual(result.lab.status.name, LabStatusChoices.DEPLOYED)
         with self.subTest(case="counts"):
@@ -219,14 +221,15 @@ class RedeployLabTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancest
 
     def test_soft_time_limit_paths(self):
         cases = (
-            ("list_images", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED, {("running", "old")}),
-            ("destroy", DestroyTimeLimit, LabStatusChoices.FAILED, {("running", "old")}),
-            ("deploy", DeployTimeLimit, LabStatusChoices.FAILED, {("", "")}),
-            ("inspect", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED, {("", "")}),
+            ("list_images", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED, {("running", "old")}, OLD_INSPECT),
+            ("destroy", DestroyTimeLimit, LabStatusChoices.FAILED, {("running", "old")}, {}),
+            ("deploy", DeployTimeLimit, LabStatusChoices.FAILED, {("", "")}, {}),
+            ("inspect", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED, {("", "")}, {}),
         )
-        for method_name, raised_class, status, node_state in cases:
+        for method_name, raised_class, status, node_state, last_inspect in cases:
             with self.subTest(method=method_name):
                 self._reset()
+                Lab.objects.filter(pk=self.lab.pk).update(last_inspect=OLD_INSPECT)
                 getattr(self.client_mock, method_name).side_effect = SoftTimeLimitExceeded()
                 with self.assertRaises(SoftTimeLimitExceeded) as raised:
                     redeploy_lab(self.lab)
@@ -234,6 +237,7 @@ class RedeployLabTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancest
                 self.assertIs(type(raised.exception), raised_class)
                 self.assertEqual(self._lab().status.name, status)
                 self.assertEqual(set(self._node_state().values()), node_state)
+                self.assertEqual(self._lab().last_inspect, last_inspect)
                 self.client_mock.close.assert_called_once_with()
 
     def test_client_is_closed(self):

@@ -16,6 +16,7 @@ from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiError
 from containerlab_orchestrator.deploy import (
+    ADDRESS_WARNING,
     BAD_TOPOLOGY_MESSAGE,
     CONFLICT_MESSAGE,
     IMAGE_LIST_MESSAGE,
@@ -29,6 +30,7 @@ from containerlab_orchestrator.deploy import (
     STATUS_GUARD_DEPLOYED_MESSAGE,
     STATUS_MESSAGE,
     STATUS_MISSING_MESSAGE,
+    UNKNOWN_CONTAINERS_WARNING,
     DeployTimeLimit,
     deploy_lab,
     error_text,
@@ -42,6 +44,9 @@ from containerlab_orchestrator.tests.test_build import BuildLabTestCase
 DIGEST = "sha256:" + "a1" * 32
 SERVER_ERROR_PREFIX = "Host clab01: POST /api/v1/labs returned HTTP 500: "
 LOCKED_LAB_READ = re.compile(r"FROM [`\"]containerlab_orchestrator_lab[`\"] .*FOR UPDATE", re.DOTALL)
+OLD_INSPECT = [{"old": 1}]
+OLD_ADDRESS = "172.20.30.50"
+PLANNED_ADDRESSES = {"arista1": "172.20.30.2", "leaf1": "172.20.30.3"}
 
 
 def api_error(status_code, server_message="failed"):
@@ -161,6 +166,15 @@ class DeployLabTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestors
         """Return the state and the container ID of each node row by node name."""
         return {row.node_name: (row.state, row.container_id) for row in self._rows().values()}
 
+    def _seed_old_inspect(self):
+        """Give the lab an old inspect result and each node row an old management address."""
+        Lab.objects.filter(pk=self.lab.pk).update(last_inspect=OLD_INSPECT)
+        LabNode.objects.filter(lab=self.lab).update(mgmt_ipv4=OLD_ADDRESS)
+
+    def _addresses(self):
+        """Return the management address of each node row by node name."""
+        return {row.node_name: row.mgmt_ipv4 for row in self._rows().values()}
+
 
 class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancestors
     """Test the status, the node state, the warnings, and the client calls of a deploy."""
@@ -242,11 +256,94 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         self.assertEqual(result.warnings, [NEW_BUILD_WARNING.format(lab=self.lab)])
         self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
 
+    def test_deploy_writes_the_live_address_and_the_inspect_result(self):
+        cases = (
+            (("172.20.30.2", "/24"), ("172.20.30.99", "/24"), ["leaf1"]),
+            (("172.20.30.98", "/24"), ("172.20.30.99", "/0"), ["arista1", "leaf1"]),
+        )
+        for arista1, leaf1, differ in cases:
+            with self.subTest(differ=differ):
+                self._set_status(LabStatusChoices.BUILT)
+                self._seed_old_inspect()
+                addresses = {"arista1": arista1[0], "leaf1": leaf1[0]}
+                containers = [
+                    {"nodeName": name, "state": "running", "container_id": f"id-{name}", "ipv4_address": "".join(live)}
+                    for name, live in (("arista1", arista1), ("leaf1", leaf1))
+                ]
+                self.client_mock.inspect.return_value = containers
+                result = deploy_lab(self.lab)
+                self.assertEqual(self._addresses(), addresses)
+                self.assertEqual(
+                    result.warnings,
+                    [
+                        ADDRESS_WARNING.format(
+                            node=name, lab=self.lab, live=addresses[name], host=self.lab.host, planned=planned
+                        )
+                        for name, planned in PLANNED_ADDRESSES.items()
+                        if name in differ
+                    ],
+                )
+                self.assertEqual(self._lab().last_inspect, containers)
+                self.assertEqual(
+                    self._node_state(), {"arista1": ("running", "id-arista1"), "leaf1": ("running", "id-leaf1")}
+                )
+
+    def test_row_with_no_live_address_gets_the_planned_address(self):
+        self._seed_old_inspect()
+        LabNode.objects.create(lab=self.lab, node_name="gone1", kind="linux", image="alpine", mgmt_ipv4="172.20.30.60")
+        self.client_mock.inspect.return_value = [
+            {"nodeName": "arista1", "state": "running", "container_id": "a", "ipv4_address": "N/A"}
+        ]
+        result = deploy_lab(self.lab)
+        self.assertEqual(self._addresses(), {**PLANNED_ADDRESSES, "gone1": "172.20.30.60"})
+        self.assertEqual(result.warnings, [])
+
+    def test_unknown_containers_give_one_warning(self):
+        self._seed_old_inspect()
+        self.client_mock.inspect.return_value = [
+            {"name": "clab-build-lab-sshx", "nodeName": ""},
+            {"name": 5, "nodeName": "old2"},
+            {"name": None},
+            {"name": "clab-build-lab-old1", "nodeName": "old1"},
+            "not a container",
+            *self.client_mock.inspect.return_value,
+        ]
+        result = deploy_lab(self.lab)
+        names = "?, clab-build-lab-old1, clab-build-lab-sshx, old2"
+        self.assertEqual(
+            result.warnings, [UNKNOWN_CONTAINERS_WARNING.format(host=self.lab.host, lab=self.lab, names=names)]
+        )
+        self.assertEqual((result.state_count, self._lab().status.name), (2, LabStatusChoices.DEPLOYED))
+        self.assertEqual(self._addresses(), PLANNED_ADDRESSES)
+
+    def test_failed_inspect_writes_no_result(self):
+        for case, response in (("error", api_error(500)), ("not a list", [{"build-lab": []}])):
+            with self.subTest(case=case):
+                self._set_status(LabStatusChoices.BUILT)
+                self._seed_old_inspect()
+                self.client_mock.inspect.side_effect = response
+                deploy_lab(self.lab)
+                self.assertEqual(self._lab().last_inspect, {})
+                self.assertEqual(self._addresses(), PLANNED_ADDRESSES)
+
+    def test_new_build_keeps_the_new_addresses(self):
+        def build_during_deploy(*_args, **_kwargs):
+            LabNode.objects.filter(lab=self.lab).update(mgmt_ipv4="172.20.30.70")
+            Lab.objects.filter(pk=self.lab.pk).update(built_at=timezone.now())
+            return {}
+
+        self.client_mock.deploy.side_effect = build_during_deploy
+        result = deploy_lab(self.lab)
+        self.assertEqual(set(self._addresses().values()), {"172.20.30.70"})
+        self.assertEqual(result.warnings, [NEW_BUILD_WARNING.format(lab=self.lab)])
+
     def test_status_writes_are_narrow(self):
-        cases = ((LabStatusChoices.DEPLOYED, None), (LabStatusChoices.FAILED, api_error(500)))
-        for status, deploy_error in cases:
+        containers = self.client_mock.inspect.return_value
+        cases = ((LabStatusChoices.DEPLOYED, None, containers), (LabStatusChoices.FAILED, api_error(500), {}))
+        for status, deploy_error, last_inspect in cases:
             with self.subTest(status=status):
                 self._set_status(LabStatusChoices.BUILT)
+                self._seed_old_inspect()
                 start = self._lab().last_updated
                 self.client_mock.deploy.side_effect = deploy_error
                 with mock.patch.object(Lab, "save", autospec=True, side_effect=Lab.save) as save:
@@ -256,8 +353,9 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
                         pass
                 self.assertEqual(self._lab().status.name, status)
                 self.assertEqual(save.call_count, 1)
-                self.assertEqual(save.call_args.kwargs, {"update_fields": ["status", "last_updated"]})
+                self.assertEqual(save.call_args.kwargs, {"update_fields": ["status", "last_inspect", "last_updated"]})
                 self.assertGreater(self._lab().last_updated, start)
+                self.assertEqual(self._lab().last_inspect, last_inspect)
 
     def test_status_writes_lock_the_lab_row(self):
         for status, deploy_error in ((LabStatusChoices.DEPLOYED, None), (LabStatusChoices.FAILED, api_error(500))):
@@ -433,20 +531,22 @@ class DeployLabFailureTestCase(DeployLabTestCase):  # pylint: disable=too-many-a
 
     def test_soft_time_limit_paths(self):
         cases = (
-            ("deploy", DeployTimeLimit, LabStatusChoices.FAILED),
-            ("list_images", SoftTimeLimitExceeded, LabStatusChoices.BUILT),
-            ("inspect", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED),
+            ("deploy", DeployTimeLimit, LabStatusChoices.FAILED, {}),
+            ("list_images", SoftTimeLimitExceeded, LabStatusChoices.BUILT, OLD_INSPECT),
+            ("inspect", SoftTimeLimitExceeded, LabStatusChoices.DEPLOYED, {}),
         )
-        for method_name, raised_class, status in cases:
+        for method_name, raised_class, status, last_inspect in cases:
             with self.subTest(method=method_name):
                 self._set_status(LabStatusChoices.BUILT)
                 self._seed_old_node_state()
+                self._seed_old_inspect()
                 self.client_mock.reset_mock()
                 getattr(self.client_mock, method_name).side_effect = SoftTimeLimitExceeded()
                 with self.assertRaises(raised_class):
                     deploy_lab(self.lab)
                 getattr(self.client_mock, method_name).side_effect = None
                 self.assertEqual(self._lab().status.name, status)
+                self.assertEqual(self._lab().last_inspect, last_inspect)
                 self.client_mock.close.assert_called_once_with()
         self.assertEqual(set(self._node_state().values()), {("", "")})
 
