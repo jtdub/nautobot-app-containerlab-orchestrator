@@ -297,6 +297,13 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
         result = deploy_lab(self.lab)
         self.assertEqual(self._addresses(), {**PLANNED_ADDRESSES, "gone1": "172.20.30.60"})
         self.assertEqual(result.warnings, [])
+        with self.subTest(case="planned address that is not IPv4"):
+            self._set_status(LabStatusChoices.BUILT)
+            self._seed_old_inspect()
+            topology_yaml = self._lab().topology_yaml.replace("172.20.30.3", "not-an-address")
+            Lab.objects.filter(pk=self.lab.pk).update(topology_yaml=topology_yaml)
+            deploy_lab(self.lab)
+            self.assertEqual(self._addresses()["leaf1"], OLD_ADDRESS)
 
     def test_unknown_containers_give_one_warning(self):
         self._seed_old_inspect()

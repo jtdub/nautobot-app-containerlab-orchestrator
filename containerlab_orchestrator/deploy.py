@@ -442,7 +442,7 @@ def _unknown_names(containers, row_names):
 
 
 def _planned_addresses(topology_yaml):
-    """Return the planned address of each node of the topology, or an empty mapping for a topology that the job cannot read."""
+    """Return the planned address of each topology node, or an empty mapping for a topology that the job cannot read."""
     try:
         topology = yaml.safe_load(topology_yaml) if topology_yaml else None
     except yaml.YAMLError:
