@@ -11,6 +11,7 @@ from nautobot.extras.models import Status
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.deploy import (
     CONFLICT_MESSAGE,
+    INSPECT_WARNING,
     MISSING_IMAGES_MESSAGE,
     NEW_BUILD_WARNING,
     NO_TOPOLOGY_MESSAGE,
@@ -166,6 +167,18 @@ class RedeployLabTestCase(DeployLabTestCase):  # pylint: disable=too-many-ancest
         self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
         self.assertEqual(self._node_state(), NEW_NODE_STATE)
         self.client_mock.deploy.assert_called_once_with("build-lab", self._lab().topology_yaml, reconfigure=False)
+
+    def test_destroy_warning_comes_before_the_inspect_warning(self):
+        self.client_mock.destroy.side_effect = plain_not_found()
+        self.client_mock.inspect.side_effect = api_error(500)
+        result = redeploy_lab(self.lab)
+        self.assertEqual(
+            result.warnings,
+            [
+                NOT_FOUND_WARNING.format(host=self.lab.host, lab=self.lab),
+                INSPECT_WARNING.format(lab=self.lab, error=error_text(api_error(500))),
+            ],
+        )
 
     def test_deploy_failure_after_the_destroy(self):
         half_done = HALF_DONE_MESSAGE.format(lab=self.lab, host=self.lab.host)
