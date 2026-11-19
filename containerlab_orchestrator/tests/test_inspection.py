@@ -31,6 +31,8 @@ from containerlab_orchestrator.inspection import (
     NO_MATCH_WARNING,
     NOT_RUNNING_WARNING,
     inspect_lab,
+    inspect_on_host,
+    inspect_statuses,
 )
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.tests.test_build import BuildLabTestCase
@@ -462,3 +464,122 @@ class InspectLabFailureTestCase(InspectLabTestCase):  # pylint: disable=too-many
         error = self._assert_changes_nothing([error_text(server_error)])
         self.assertNotIn("MARKER", error.messages[0])
         self.assertIn("x" * 500, error.messages[0])
+
+
+class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-ancestors
+    """Test the inspect with skip_unchanged, which does not save a lab with no change."""
+
+    def setUp(self):
+        """Add an uptime text to each container, and inspect one time, so the lab holds the current values."""
+        super().setUp()
+        for container in self.containers:
+            container["status"] = "Up 1 hours"
+        inspect_lab(self.lab)
+
+    def _inspect(self, skip_unchanged=True):
+        """Inspect a fresh read of the lab with the mocked client, and return the result."""
+        lab = Lab.objects.select_related("status", "host").get(pk=self.lab.pk)
+        return inspect_on_host(self.client_mock, lab, inspect_statuses(), skip_unchanged=skip_unchanged)
+
+    def _list(self, **changes):
+        """Make the mocked client list a copy of the containers, with these keys changed in each container."""
+        listed = [dict(container, **changes) for container in self.containers]
+        self.client_mock.inspect.return_value = listed
+        return listed
+
+    def _make_current(self):
+        """Set Deployed, and inspect the current containers, so the lab holds the current values."""
+        self._set_status(LabStatusChoices.DEPLOYED)
+        self.client_mock.inspect.return_value = self.containers
+        inspect_lab(self.lab)
+
+    def _set_row(self, **values):
+        """Change the node row of the second container, with no change to the stored inspect result."""
+        LabNode.objects.filter(lab=self.lab, node_name=self.containers[1]["nodeName"]).update(**values)
+
+    def test_no_change_does_not_save(self):
+        before = self._state()
+        result = self._inspect()
+        self.assertEqual(self._state(), before)
+        self.assertEqual((result.node_count, result.running_count, result.warnings), (2, 2, []))
+        self.assertIs(result.saved, False)
+
+    def test_status_text_only_is_no_change(self):
+        before = self._state()
+        self._list(status="Up 2 hours")
+        result = self._inspect()
+        self.assertIs(result.saved, False)
+        self.assertEqual(self._state(), before)
+        self.assertEqual([item["status"] for item in self._lab().last_inspect], ["Up 1 hours", "Up 1 hours"])
+
+    def test_reordered_list_is_no_change(self):
+        before = self._state()
+        self.client_mock.inspect.return_value = [dict(container) for container in reversed(self.containers)]
+        result = self._inspect()
+        self.assertIs(result.saved, False)
+        self.assertEqual(self._state(), before)
+
+    def test_each_change_saves(self):
+        first, second = self.containers
+
+        def list_changed(key, value):
+            self.client_mock.inspect.return_value = [first, dict(second, **{key: value})]
+
+        changes = {
+            "container state": (lambda: list_changed("state", "exited"), LabStatusChoices.FAILED),
+            "container ID": (lambda: list_changed("container_id", "id-new"), LabStatusChoices.DEPLOYED),
+            "container address": (lambda: list_changed("ipv4_address", "172.20.30.99/24"), LabStatusChoices.DEPLOYED),
+            "container image": (lambda: list_changed("image", "other:1"), LabStatusChoices.DEPLOYED),
+            "row state": (lambda: self._set_row(state="old"), LabStatusChoices.DEPLOYED),
+            "row container ID": (lambda: self._set_row(container_id="old"), LabStatusChoices.DEPLOYED),
+            "row address": (lambda: self._set_row(mgmt_ipv4=OLD_ADDRESS), LabStatusChoices.DEPLOYED),
+            "status": (lambda: self._set_status(LabStatusChoices.FAILED), LabStatusChoices.DEPLOYED),
+        }
+        for case, (change, expected_status) in changes.items():
+            with self.subTest(case=case):
+                self._make_current()
+                change()
+                before = self._lab().last_updated
+                result = self._inspect()
+                self.assertIs(result.saved, True)
+                self.assertGreater(self._lab().last_updated, before)
+                self.assertEqual(self._lab().status.name, expected_status)
+                self.assertEqual(self._lab().last_inspect, self.client_mock.inspect.return_value)
+
+    def test_skip_option_adds_one_query(self):
+        counts = {}
+        for skip_unchanged in (False, True):
+            self._make_current()
+            self._list(state="exited")
+            with CaptureQueriesContext(connection) as queries:
+                result = self._inspect(skip_unchanged=skip_unchanged)
+            self.assertIs(result.saved, True)
+            counts[skip_unchanged] = len(queries.captured_queries)
+        self.assertEqual(counts[True], counts[False] + 1)
+        self._make_current()
+        for _ in range(2):
+            before = self._lab().last_updated
+            inspect_lab(self.lab)
+            self.assertGreater(self._lab().last_updated, before)
+
+    def test_no_change_keeps_the_lab_guard(self):
+        changed = {}
+
+        def save_then_list(_name):
+            Lab.objects.get(pk=self.lab.pk).save()
+            changed["state"] = self._state()
+            return [dict(container, state="exited") for container in self.containers]
+
+        for skip_unchanged in (False, True):
+            with self.subTest(skip_unchanged=skip_unchanged):
+                self._make_current()
+                lab = Lab.objects.select_related("status", "host").get(pk=self.lab.pk)
+                self.client_mock.inspect.side_effect = save_then_list
+                try:
+                    with self.assertRaises(ValidationError) as raised:
+                        inspect_on_host(self.client_mock, lab, inspect_statuses(), skip_unchanged=skip_unchanged)
+                finally:
+                    self.client_mock.inspect.side_effect = None
+                self.assertEqual(raised.exception.messages, [INSPECT_GUARD_MESSAGE.format(lab=self.lab)])
+                self.assertEqual(self._state(), changed["state"])
+                self.assertGreater(changed["state"][1], lab.last_updated)
