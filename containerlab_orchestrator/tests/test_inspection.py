@@ -2,6 +2,8 @@
 
 from unittest import mock
 
+from celery.exceptions import SoftTimeLimitExceeded
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -10,13 +12,23 @@ from nautobot.extras.models import Status
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiError
-from containerlab_orchestrator.deploy import UNKNOWN_CONTAINERS_WARNING, error_text
+from containerlab_orchestrator.deploy import (
+    BAD_TOPOLOGY_MESSAGE,
+    NO_TOPOLOGY_MESSAGE,
+    RENAMED_MESSAGE,
+    STATUS_MISSING_MESSAGE,
+    UNKNOWN_CONTAINERS_WARNING,
+    error_text,
+)
 from containerlab_orchestrator.destroy import NOT_FOUND_WARNING
 from containerlab_orchestrator.inspection import (
     HELPERS_WARNING,
     INSPECT_DELETED_MESSAGE,
     INSPECT_GUARD_MESSAGE,
+    INSPECT_NOT_OWNED_MESSAGE,
+    INSPECT_RESULT_MESSAGE,
     INSPECT_STATUS_MESSAGE,
+    NO_MATCH_WARNING,
     NOT_RUNNING_WARNING,
     inspect_lab,
 )
@@ -105,10 +117,18 @@ class InspectLabTestCase(BuildLabTestCase):  # pylint: disable=too-many-ancestor
             pass
 
     def _assert_fails_with(self, messages):
-        """Assert that the inspect fails with these messages."""
+        """Assert that the inspect fails with these messages, and return the error."""
         with self.assertRaises(ValidationError) as raised:
             inspect_lab(self.lab)
         self.assertEqual(raised.exception.messages, messages)
+        return raised.exception
+
+    def _assert_changes_nothing(self, messages):
+        """Assert that the inspect fails with these messages and does not change the lab, and return the error."""
+        before = self._state()
+        error = self._assert_fails_with(messages)
+        self.assertEqual(self._state(), before)
+        return error
 
 
 class InspectLabResultTestCase(InspectLabTestCase):  # pylint: disable=too-many-ancestors
@@ -192,6 +212,17 @@ class InspectLabResultTestCase(InspectLabTestCase):  # pylint: disable=too-many-
             [UNKNOWN_CONTAINERS_WARNING.format(host=self.lab.host, lab=self.lab, names="clab-build-lab-old1")],
         )
 
+    def test_strong_match_compares_the_normalized_image(self):
+        arista1, leaf1 = self.containers
+        containers = [{**arista1, "image": f"docker.io/library/{arista1['image']}"}, leaf1, "not a container"]
+        self.client_mock.inspect.return_value = containers
+        for start in (LabStatusChoices.BUILT, LabStatusChoices.DESTROYED):
+            with self.subTest(start=start):
+                self._seed(start)
+                result = inspect_lab(self.lab)
+                self.assertEqual((self._lab().status.name, result.warnings), (LabStatusChoices.DEPLOYED, []))
+                self.assertEqual((self._lab().last_inspect, self._node_rows()), (containers, RUNNING_ROWS))
+
     def test_write_is_narrow_and_locks_the_row(self):
         cases = (
             (LabStatusChoices.FAILED, self.containers, LabStatusChoices.DEPLOYED),
@@ -218,15 +249,6 @@ class InspectLabResultTestCase(InspectLabTestCase):  # pylint: disable=too-many-
                 inspect_lab(self.lab)
         self.assertEqual(self._state(), before)
         self.assertEqual(self._node_rows(), SEED_ROWS)
-
-    def test_unreadable_topology_gives_no_planned_address(self):
-        self.client_mock.inspect.return_value = [{**container, "ipv4_address": "N/A"} for container in self.containers]
-        for topology_yaml in ("", "name: [x"):
-            with self.subTest(topology_yaml=topology_yaml):
-                self._seed(LabStatusChoices.DEPLOYED)
-                Lab.objects.filter(pk=self.lab.pk).update(topology_yaml=topology_yaml)
-                inspect_lab(self.lab)
-                self.assertEqual({row[2] for row in self._node_rows().values()}, {OLD_ADDRESS})
 
     def test_changed_lab_writes_nothing(self):
         def set_failed():
@@ -287,7 +309,7 @@ class InspectLabResultTestCase(InspectLabTestCase):  # pylint: disable=too-many-
 
 
 class InspectLabFailureTestCase(InspectLabTestCase):  # pylint: disable=too-many-ancestors
-    """Test the checks before any API call."""
+    """Test the checks before any API call, and the inspect results that change nothing or keep the status."""
 
     def test_planned_lab_fails_with_no_api_call(self):
         self._seed(LabStatusChoices.PLANNED)
@@ -296,3 +318,145 @@ class InspectLabFailureTestCase(InspectLabTestCase):  # pylint: disable=too-many
         self._assert_fails_with([INSPECT_STATUS_MESSAGE.format(lab=self.lab, status=status)])
         self.client_class.assert_not_called()
         self.assertEqual(self._state(), before)
+
+    def test_missing_status_fails_with_no_api_call(self):
+        lab_type = ContentType.objects.get_for_model(Lab)
+        for name in (LabStatusChoices.DEPLOYED, LabStatusChoices.FAILED, LabStatusChoices.DESTROYED):
+            with self.subTest(status=name):
+                status = Status.objects.get(name=name)
+                status.content_types.remove(lab_type)
+                try:
+                    self._assert_changes_nothing([STATUS_MISSING_MESSAGE.format(status=name)])
+                finally:
+                    status.content_types.add(lab_type)
+                self.client_class.assert_not_called()
+
+    def test_topology_check_fails_with_no_api_call(self):
+        topology_yaml = self._lab().topology_yaml
+        cases = {
+            "renamed": ({"name": "build-lab2"}, RENAMED_MESSAGE.format(lab="build-lab2")),
+            "no topology": ({"topology_yaml": ""}, NO_TOPOLOGY_MESSAGE.format(lab=self.lab)),
+            "not valid YAML": ({"topology_yaml": "name: [x"}, BAD_TOPOLOGY_MESSAGE.format(lab=self.lab)),
+        }
+        for case, (change, message) in cases.items():
+            with self.subTest(case=case):
+                Lab.objects.filter(pk=self.lab.pk).update(name="build-lab", topology_yaml=topology_yaml)
+                Lab.objects.filter(pk=self.lab.pk).update(**change)
+                self._assert_changes_nothing([message])
+                self.client_class.assert_not_called()
+
+    def test_login_error_changes_nothing(self):
+        login_error = inspect_error(401, "invalid credentials")
+        self.client_mock.login.side_effect = login_error
+        error = self._assert_changes_nothing([error_text(login_error)])
+        self.assertIs(error.__cause__, login_error)
+        self.client_mock.inspect.assert_not_called()
+
+    def test_errors_change_nothing(self):
+        not_owned = INSPECT_NOT_OWNED_MESSAGE.format(host=self.lab.host, lab=self.lab)
+        cases = {
+            "not-owned 404": (inspect_error(404, "lab 'build-lab' not found or not owned by user"), not_owned),
+            "404 with other text": (inspect_error(404, "lab 'build-lab' is gone"), None),
+            "404 with no text": (inspect_error(404), None),
+            "300": (inspect_error(300, "Multiple Choices"), None),
+            "401": (inspect_error(401, "token expired"), None),
+            "409": (inspect_error(409, "conflict"), None),
+            "500": (inspect_error(500, "internal error"), None),
+            "read timeout": (ClabApiError("Host clab01: no response came in 300 seconds.", timed_out=True), None),
+            "no connection": (ClabApiError("Host clab01: cannot reach http://clab01: ConnectionError."), None),
+            "no status": (ClabApiError("Host clab01: the lab name is not valid."), None),
+        }
+        for case, (inspect_failure, message) in cases.items():
+            with self.subTest(case=case):
+                self.client_mock.inspect.side_effect = inspect_failure
+                error = self._assert_changes_nothing([message or error_text(inspect_failure)])
+                self.assertIs(error.__cause__, inspect_failure)
+                self.assertEqual(self._lab().status.name, LabStatusChoices.DEPLOYED)
+
+    def test_unreadable_result_changes_nothing(self):
+        not_json = ClabApiError("Host clab01: GET /api/v1/labs/build-lab returned a response that is not JSON.", 200)
+        cases = {"a dict": [{"build-lab": []}], "a JSON string": ["x"], "not JSON": not_json}
+        for case, response in cases.items():
+            with self.subTest(case=case):
+                self.client_mock.inspect.side_effect = response
+                error = self._assert_changes_nothing([INSPECT_RESULT_MESSAGE.format(host=self.lab.host, lab=self.lab)])
+                self.assertIs(error.__cause__, response if case == "not JSON" else None)
+
+    def test_foreign_result_changes_nothing(self):
+        arista1, leaf1 = self.containers
+        no_owner = {key: value for key, value in leaf1.items() if key != "owner"}
+        cases = {
+            "other user": [arista1, {**leaf1, "owner": "other-user"}],
+            "no owner": [arista1, no_owner],
+            "empty owner": [arista1, {**leaf1, "owner": ""}],
+        }
+        for start in (LabStatusChoices.DEPLOYED, LabStatusChoices.BUILT):
+            for case, containers in cases.items():
+                with self.subTest(start=start, case=case):
+                    self._seed(start)
+                    self.client_mock.inspect.return_value = containers
+                    self._assert_changes_nothing([INSPECT_NOT_OWNED_MESSAGE.format(host=self.lab.host, lab=self.lab)])
+
+    def test_no_strong_match_keeps_built_and_destroyed(self):
+        arista1, leaf1 = self.containers
+        no_match = NO_MATCH_WARNING.format(host=self.lab.host, lab=self.lab)
+        old1 = {**leaf1, "name": "clab-build-lab-old1", "nodeName": "old1"}
+        sshx = {"name": "clab-build-lab-sshx", "nodeName": "", "owner": HOST_USER, "image": "sshx"}
+        listed = {"name": "clab-build-lab-x", "nodeName": ["x"], "owner": HOST_USER, "image": "x"}
+        cases = {
+            "node name that is not a row": ([arista1, leaf1, old1], ["clab-build-lab-old1"]),
+            "row with no item": ([arista1], []),
+            "another image": ([arista1, {**leaf1, "image": "other:1"}], []),
+            "no image": ([arista1, {**leaf1, "image": None}], []),
+            "two items with one node name": ([arista1, leaf1, {**leaf1, "name": "clab-build-lab-leaf1-b"}], []),
+            "tool container": ([arista1, leaf1, sshx], ["clab-build-lab-sshx"]),
+            "node name that is a list": ([arista1, leaf1, listed], ["clab-build-lab-x"]),
+        }
+        for start in (LabStatusChoices.BUILT, LabStatusChoices.DESTROYED):
+            for case, (containers, unknown) in cases.items():
+                with self.subTest(start=start, case=case):
+                    self._seed(start)
+                    self.client_mock.inspect.return_value = containers
+                    result = inspect_lab(self.lab)
+                    unknown_warnings = [
+                        UNKNOWN_CONTAINERS_WARNING.format(host=self.lab.host, lab=self.lab, names=name)
+                        for name in unknown
+                    ]
+                    self.assertEqual(result.warnings, [*unknown_warnings, no_match])
+                    self.assertEqual((self._lab().status.name, self._lab().last_inspect), (start, containers))
+                    self.assertEqual(self._node_rows()["arista1"], RUNNING_ROWS["arista1"])
+        with self.subTest(start=LabStatusChoices.DEPLOYED, case="another image"):
+            self._seed(LabStatusChoices.DEPLOYED)
+            self.client_mock.inspect.return_value = cases["another image"][0]
+            result = inspect_lab(self.lab)
+            self.assertEqual((self._lab().status.name, result.warnings), (LabStatusChoices.DEPLOYED, []))
+
+    def test_soft_time_limit_changes_nothing(self):
+        cases = {
+            "login": (self.client_mock.login, SoftTimeLimitExceeded()),
+            "inspect": (self.client_mock.inspect, SoftTimeLimitExceeded()),
+        }
+        for case, (method, limit) in cases.items():
+            with self.subTest(case=case):
+                before = self._state()
+                method.side_effect = limit
+                try:
+                    with self.assertRaises(SoftTimeLimitExceeded) as raised:
+                        inspect_lab(self.lab)
+                finally:
+                    method.side_effect = None
+                self.assertIs(raised.exception, limit)
+                self.assertEqual(self._state(), before)
+        with self.subTest(case="write"):
+            before = self._state()
+            with mock.patch.object(Lab, "save", side_effect=SoftTimeLimitExceeded):
+                with self.assertRaises(SoftTimeLimitExceeded):
+                    inspect_lab(self.lab)
+            self.assertEqual(self._state(), before)
+
+    def test_server_text_is_cut(self):
+        server_error = inspect_error(500, "x" * 599 + "MARKER")
+        self.client_mock.inspect.side_effect = server_error
+        error = self._assert_changes_nothing([error_text(server_error)])
+        self.assertNotIn("MARKER", error.messages[0])
+        self.assertIn("x" * 500, error.messages[0])

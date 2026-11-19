@@ -10,8 +10,15 @@ from nautobot.extras.models import Status
 
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
-from containerlab_orchestrator.deploy import error_text, lab_status, lock_lab, write_node_state
-from containerlab_orchestrator.destroy import DESTROY_STATUSES, NOT_FOUND_WARNING, PLAIN_NOT_FOUND
+from containerlab_orchestrator.deploy import (
+    error_text,
+    lab_status,
+    lock_lab,
+    normalize_image,
+    stored_nodes,
+    write_node_state,
+)
+from containerlab_orchestrator.destroy import DESTROY_STATUSES, NOT_FOUND_WARNING, NOT_OWNED_NOT_FOUND, PLAIN_NOT_FOUND
 from containerlab_orchestrator.models import Lab
 
 INSPECT_STATUSES = frozenset(
@@ -93,12 +100,14 @@ def inspect_lab(lab):
     """Read the containers of the lab on its host, and write the node rows, the stored result, and the status.
 
     Raises:
-        ValidationError: If the lab cannot inspect, a client call fails, or the lab changed during the job.
+        ValidationError: If the lab or its topology cannot inspect, a client call fails, the host user does not own
+            the lab, or the lab changed during the job.
     """
     current = Lab.objects.select_related("status", "host").get(pk=lab.pk)
     if current.status.name not in INSPECT_STATUSES:
         raise ValidationError(INSPECT_STATUS_MESSAGE.format(lab=current, status=current.status))
     statuses = inspect_statuses()
+    stored_nodes(current)
     client = ClabApiClient(current.host)
     try:
         client.login()
@@ -133,8 +142,10 @@ def _read_containers(client, lab):
     """Return the container list, what the call found, and the warnings of the inspect call.
 
     Raises:
-        ValidationError: If the inspect call fails with an error that does not tell what the host has.
+        ValidationError: If the inspect call fails with an error that does not tell what the host has, the result is
+            not a list, or another user of the host owns the lab.
     """
+    unreadable = INSPECT_RESULT_MESSAGE.format(host=lab.host, lab=lab)
     try:
         containers = client.inspect(lab.name)
     except ClabApiError as error:
@@ -143,8 +154,38 @@ def _read_containers(client, lab):
                 return [], Found.NONE_LEFT, [NOT_FOUND_WARNING.format(host=lab.host, lab=lab)]
             if error.server_message == HELPERS_NOT_FOUND.format(lab=lab.name):
                 return [], Found.HELPERS_LEFT, [HELPERS_WARNING.format(host=lab.host, lab=lab)]
+            if error.server_message == NOT_OWNED_NOT_FOUND.format(lab=lab.name):
+                raise ValidationError(INSPECT_NOT_OWNED_MESSAGE.format(host=lab.host, lab=lab)) from error
+        if HTTPStatus.OK <= (error.status_code or 0) < HTTPStatus.MULTIPLE_CHOICES:
+            raise ValidationError(unreadable) from error
         raise ValidationError(error_text(error)) from error
+    if not isinstance(containers, list):
+        raise ValidationError(unreadable)
+    _check_owner(client, lab, containers)
     return containers, Found.LISTED if containers else Found.NONE_LEFT, []
+
+
+def _check_owner(client, lab, containers):
+    """Make sure that the host user owns each container of the list.
+
+    Raises:
+        ValidationError: If a container has an owner that is not the host user, or has no owner.
+    """
+    if any(isinstance(container, dict) and container.get("owner") != client.username for container in containers):
+        raise ValidationError(INSPECT_NOT_OWNED_MESSAGE.format(host=lab.host, lab=lab))
+
+
+def _strong_match(containers, rows):
+    """Return True if the containers and the node rows match one to one by node name and image."""
+    images = {}
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        node_name, image = container.get("nodeName"), container.get("image")
+        if not isinstance(node_name, str) or not isinstance(image, str) or node_name in images:
+            return False
+        images[node_name] = normalize_image(image)
+    return images == {row.node_name: normalize_image(row.image) for row in rows}
 
 
 def _write_inspect(lab, statuses, containers, found, warnings):
@@ -160,7 +201,14 @@ def _write_inspect(lab, statuses, containers, found, warnings):
         written = write_node_state(locked, locked.topology_yaml, containers, warnings)
         running = [row.node_name for row in written.rows if row.state == RUNNING]
         not_running = sorted({row.node_name for row in written.rows} - set(running))
-        new_status = _new_status(lab, statuses, found, not_running)
+        matched = (
+            found is not Found.LISTED
+            or lab.status.name not in MATCH_STATUSES
+            or _strong_match(containers, written.rows)
+        )
+        new_status = _new_status(lab, statuses, found, not_running) if matched else None
+        if not matched:
+            warnings.append(NO_MATCH_WARNING.format(host=lab.host, lab=lab))
         if new_status == statuses.failed and found is Found.LISTED and not_running:
             warnings.append(NOT_RUNNING_WARNING.format(lab=lab, nodes=", ".join(not_running)))
         if new_status:

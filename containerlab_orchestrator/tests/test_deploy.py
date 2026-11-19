@@ -37,6 +37,7 @@ from containerlab_orchestrator.deploy import (
     host_images,
     missing_images,
     normalize_image,
+    write_node_state,
 )
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.tests.test_build import BuildLabTestCase
@@ -335,6 +336,16 @@ class DeployLabResultTestCase(DeployLabTestCase):  # pylint: disable=too-many-an
                 lab = self._lab()
                 self.assertEqual((lab.last_inspect, lab.status.name), (last_inspect, LabStatusChoices.DEPLOYED))
                 self.assertEqual(self._addresses(), PLANNED_ADDRESSES)
+
+    def test_unreadable_topology_gives_no_planned_address(self):
+        self._seed_old_inspect()
+        containers = [{"nodeName": name, "ipv4_address": "N/A"} for name in PLANNED_ADDRESSES]
+        for topology_yaml in ("", "name: [x"):
+            with self.subTest(topology_yaml=topology_yaml):
+                warnings = []
+                write_node_state(self._lab(), topology_yaml, containers, warnings)
+                self.assertEqual(self._addresses(), dict.fromkeys(PLANNED_ADDRESSES, OLD_ADDRESS))
+                self.assertEqual(warnings, [])
 
     def test_new_build_keeps_the_new_addresses(self):
         def build_during_deploy(*_args, **_kwargs):
