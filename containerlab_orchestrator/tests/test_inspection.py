@@ -22,6 +22,7 @@ from containerlab_orchestrator.deploy import (
 )
 from containerlab_orchestrator.destroy import NOT_FOUND_WARNING
 from containerlab_orchestrator.inspection import (
+    HELPERS_NOT_FOUND,
     HELPERS_WARNING,
     INSPECT_DELETED_MESSAGE,
     INSPECT_GUARD_MESSAGE,
@@ -514,6 +515,10 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
         self.assertEqual([item["status"] for item in self._lab().last_inspect], ["Up 1 hours", "Up 1 hours"])
 
     def test_reordered_list_is_no_change(self):
+        self.containers += [
+            {"name": f"clab-build-lab-helper-{name}", "nodeName": "", "owner": HOST_USER} for name in ("a", "b")
+        ]
+        self._make_current()
         before = self._state()
         self.client_mock.inspect.return_value = [dict(container) for container in reversed(self.containers)]
         result = self._inspect()
@@ -535,6 +540,10 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
             "row container ID": (lambda: self._set_row(container_id="old"), LabStatusChoices.DEPLOYED),
             "row address": (lambda: self._set_row(mgmt_ipv4=OLD_ADDRESS), LabStatusChoices.DEPLOYED),
             "status": (lambda: self._set_status(LabStatusChoices.FAILED), LabStatusChoices.DEPLOYED),
+            "item that is not a dict": (
+                lambda: setattr(self.client_mock.inspect, "return_value", [*self.containers, "extra"]),
+                LabStatusChoices.DEPLOYED,
+            ),
         }
         for case, (change, expected_status) in changes.items():
             with self.subTest(case=case):
@@ -546,6 +555,17 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
                 self.assertGreater(self._lab().last_updated, before)
                 self.assertEqual(self._lab().status.name, expected_status)
                 self.assertEqual(self._lab().last_inspect, self.client_mock.inspect.return_value)
+
+    def test_empty_list_after_an_empty_result_saves(self):
+        self._set_status(LabStatusChoices.FAILED)
+        Lab.objects.filter(pk=self.lab.pk).update(last_inspect={})
+        LabNode.objects.filter(lab=self.lab).update(state="", container_id="")
+        before = self._lab().last_updated
+        self.client_mock.inspect.side_effect = inspect_error(404, HELPERS_NOT_FOUND.format(lab="build-lab"))
+        result = self._inspect()
+        self.assertIs(result.saved, True)
+        self.assertEqual((self._lab().status.name, self._lab().last_inspect), (LabStatusChoices.FAILED, []))
+        self.assertGreater(self._lab().last_updated, before)
 
     def test_skip_option_adds_one_query(self):
         counts = {}
