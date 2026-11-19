@@ -1,0 +1,3 @@
+Added the Inspect Lab job turned off. An administrator turns it on under Jobs and gives the permissions in the user docs.
+Added the Inspect Lab job, which reads the containers of a lab on its host and corrects the node rows and the lab status.
+Added the Inspect Lab job for each user with the change permission on the lab, also a user who is not the owner.

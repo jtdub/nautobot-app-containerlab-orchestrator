@@ -171,7 +171,7 @@ write the full image name in the node mapping, or pull the image with the exact 
 | The deploy call gives HTTP 409, another HTTP error, or a connection error. | No change. |
 | A check, the image list call, a missing image, or the soft time limit stops the job before the deploy call. | No change. |
 | The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
-| The hard time limit stops the job. | No change. The lab can run on the host. A next run gets HTTP 409. |
+| The hard time limit stops the job. | No change. The lab can run on the host. A next run gets HTTP 409. Run Inspect Lab to correct the status. |
 | The lab is deleted during the deploy. | None. The lab can still run on the host. |
 
 A container with no node row gives a warning. A tool container, such as SSHX or GoTTY, is one. A management address
@@ -317,7 +317,7 @@ Lab removes it.
 | The destroy call gives HTTP 400, 401, or 403, or the host cannot be reached. | No change. |
 | A check, the login, or the soft time limit stops the job before the destroy call. | No change. |
 | The soft time limit stops the destroy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
-| The soft time limit stops the job after the destroy call. | No change. The host no longer has the lab, but the job log says that the state is unknown. |
+| The soft time limit stops the job after the destroy call. | No change. The host no longer has the lab, but the job log says that the state is unknown. Run Inspect Lab to correct the status. |
 | The status of the lab changes during the job. | No change. The job writes nothing. The job log tells if the host still has the lab. |
 | The lab is deleted during the job. | The lab row is gone. The job log tells if the host still has the lab. |
 
@@ -447,10 +447,10 @@ The job does these steps:
 | The deploy call returns. | Deployed. Each node row gets the new state, container ID, and management address from the host. The stored inspect result gets the container list. |
 | The host has no lab of that name at the destroy. | Deployed, with a warning. |
 | A check, the image list call, a missing image, or the soft time limit stops the job before the destroy call. | No change. |
-| The destroy call fails, or the soft time limit stops it. | As for a destroy. The job does not deploy. |
+| The destroy call fails, or the soft time limit stops it. | As for a destroy. The job does not deploy. Run Inspect Lab to correct the status. |
 | The deploy call gives HTTP 500 or more, a read timeout, a closed connection, or a response that the job cannot read. | Failed. The stored inspect result gets `{}`. |
 | The deploy call gives HTTP 409, another HTTP error, or a connection error. | Destroyed. |
-| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. |
+| The soft time limit stops the deploy call. | Failed. The lab state on the host is unknown. The stored inspect result gets `{}`. Run Inspect Lab to correct the status. |
 | The inspect call fails. | Deployed. The node rows get an empty state and container ID, and the address of the build. The stored inspect result gets `{}`. The job log gives a warning. |
 
 When the deploy call fails after the destroy, the job log adds this line:
@@ -475,6 +475,186 @@ host. With the default `request_timeout` of 300 seconds, the calls take up to 23
 The rest is for the database work. If you set a larger `request_timeout`, set the soft time limit to 5 x
 `request_timeout` + 1100, and the hard time limit to 100 seconds more. The host gets a containerlab timeout of 7200
 seconds or less. Change the limits on the edit page of the job.
+
+### Inspect a lab
+
+The Inspect Lab job reads the containers of a lab on its containerlab host. It writes the state, the container ID,
+and the management address of each node row, and it sets the lab status. The job changes nothing on the host.
+
+Run the job when the lab page does not agree with the host. Two time limits can leave a wrong status:
+
+- The hard time limit stops Deploy Lab after the host deployed the lab. The lab runs, but the status stays Built,
+  Destroyed, or Failed.
+- The soft time limit stops Destroy Lab after the host removed the lab. The status stays Deployed.
+
+#### Turn on the job
+
+Nautobot adds the job turned off. An administrator does these steps one time:
+
+1. Open Jobs > Jobs, and edit the job "Inspect Lab" in the group "Containerlab Orchestrator".
+2. Select "Enabled", and save the job.
+3. Give each user who inspects labs the permissions in the table below.
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The user selects the lab, and the job checks it. |
+| `containerlab_orchestrator.change_lab` | The job writes the status and the node rows. |
+| `containerlab_orchestrator.view_labnode` | The user sees the node state on the lab page. |
+
+The user does not need to be the owner of the lab. The job reads the host credentials from the Secrets Group of the
+host, so the user needs no permission on secrets.
+
+#### Before you use the job in production
+
+The job has no test on a live clab-api-server yet. All its tests use a mocked host. An administrator does this check
+one time for each host:
+
+1. Deploy the lab of two `linux` nodes of the Deploy Lab check. Run Inspect Lab. Make sure that the lab is Deployed,
+   and that each node row has the state `running` and a management address.
+2. On the host, run `docker stop` on one node container. Run Inspect Lab. Make sure that the lab is Failed, and that
+   the job log names the node.
+3. Remove the lab on the host with `containerlab destroy`. Run Inspect Lab. Make sure that the lab is Destroyed,
+   with the warning `Host <host> has no lab named <lab>.`.
+4. If your labs use a tool container, such as SSHX or GoTTY, deploy a lab with one. Run Inspect Lab. Make sure that
+   the job does not fail with the message of "Labs of other host users".
+
+#### Who can inspect a lab
+
+The job checks the job user in this order. The first check that fails stops the job. The lab does not change, and
+the job makes no call to the host.
+
+| Check | Message |
+|---|---|
+| The user can view the lab. | `You cannot inspect this lab.` The message does not name the lab. |
+| The user has the change permission on the lab. | `You need the change permission on lab <lab> to inspect it.` |
+
+The job does not check the owner. A user with the two permissions can inspect a lab of another owner, or a lab with
+no owner.
+
+#### Before the inspect
+
+The job inspects only a Built, Deployed, Failed, or Destroyed lab. A Planned lab stops the job with
+`Lab <lab> is Planned. The job inspects only a Built, Deployed, Failed, or Destroyed lab.` Labs must be able to have
+the Deployed, Failed, and Destroyed statuses.
+
+The job also checks the stored topology YAML, as Deploy Lab does. A lab with no topology, a topology that the job
+cannot read, or a lab that changed its name after the build stops the job. Run Build Lab Topology again. In each
+case, the job makes no call to the host.
+
+#### What an inspect changes
+
+!!! warning ""
+    WARNING: The job can record a lab of this name that Nautobot did not deploy. The host user of the Secrets Group
+    can make such a lab, or a second host record can have the same URL. A Built or Destroyed lab can then become
+    Deployed or Failed. Make sure that the lab on the host is yours before you run Destroy Lab or Redeploy Lab.
+
+| Result of the inspect call | Built or Destroyed lab | Deployed or Failed lab |
+|---|---|---|
+| Each node row has a running container. | Deployed, if the containers match the build. Else no change, with a warning. | Deployed. |
+| A node row has no container, or its container does not run. | Failed, with a warning, if the containers match the build. Else no change, with a warning. | Failed, with a warning that names the nodes. |
+| The host has no lab of that name. | No change, with a warning. | Destroyed, with a warning. |
+| The host has only the helper containers of the lab. | Failed, with a warning. | Failed, with a warning. |
+| Another user of the host owns the lab. | The job fails. No change. | The job fails. No change. |
+| The host gives another error, a read timeout, or a result that the job cannot read. | The job fails. No change. | The job fails. No change. |
+| The status, a field, or the build of the lab changes during the job. | The job fails. No change. | The job fails. No change. |
+
+A node runs when the state of its container is `running`. This is a Docker and Podman state.
+
+The containers match the build when these are true:
+
+- Each container has the node name of a node row.
+- Each node row has one container.
+- The image of each container is the image of its node row. The image rules of "Before the deploy" apply.
+
+A tool container is not a node row, so it stops a match. A Built or Destroyed lab then keeps its status, with the
+warning `Host <host> runs a lab named <lab> that does not match the build of lab <lab>. The job did not change the
+status.`
+
+A helper container is a container that containerlab adds for a node, for example a Tailscale sidecar. When the host
+has only these, the warning tells you to run Inspect Lab again. If the result does not change, run Destroy Lab.
+
+When the job fails, the status, the node rows, and the stored inspect result do not change.
+
+#### Labs of other host users
+
+The job compares the owner of each container with the username of the Secrets Group of the host. If a container has
+another owner or no owner, the job fails with this message, and the lab does not change:
+
+`Host <host> has a lab named <lab> that another user of the host owns. The job did not read it. Check the Secrets Group of host <host>.`
+
+The job also fails when the host user is a clab-api-server superuser, or when the lab is shared. Use a host user that
+is not a clab-api-server superuser.
+
+The host reads the owner of a container from its `clab-owner` label. A tool container, such as SSHX or GoTTY,
+possibly has no such label. Then each Inspect Lab job of that lab fails with this message, and changes nothing. Check
+this case on your host with step 4 of the production check.
+
+#### What the job writes
+
+For each node row, the job finds the container whose node name is the row name. Then it writes these fields:
+
+- The state and the container ID of the container. A row with no container gets an empty state and container ID.
+- The management address that the host reports. A row with no container, or a container with no address, gets the
+  address of the build. If the build has no address for the row, the row keeps its address.
+
+The job log gives a warning in these cases:
+
+- `Node <node> of lab <lab> has the management address <live> on host <host>, but the build gave <planned>.`
+- `Host <host> has containers of lab <lab> with no node row: <names>.` A tool container, such as SSHX or GoTTY, is
+  one. A container that the replace option of Deploy Lab left on the host is another.
+
+The job also writes the stored inspect result. This is the `last_inspect` field of the lab in the REST API, at
+`GET /api/plugins/containerlab-orchestrator/labs/<id>/`. The lab page does not show it. It has one of these values:
+
+| Value | Meaning |
+|---|---|
+| A list of containers | The containers that the host gave to the last inspect of Inspect Lab, Deploy Lab, or Redeploy Lab. |
+| `[]` | The host had no container of the lab, or Destroy Lab removed the lab. |
+| `{}` | No result. The lab never had an inspect, an inspect call of Deploy Lab or Redeploy Lab failed, or a job set Failed. |
+
+Each user who can view the lab can read the stored inspect result. Each container in it holds the server user name
+(`owner`) and the path of the topology file on the host (`labPath` and `absLabPath`). It holds no secret.
+
+#### Inspect during another job
+
+Do not run Inspect Lab while a Deploy Lab, Destroy Lab, or Redeploy Lab job of the lab runs. If Inspect Lab writes
+first, the other job can fail with `Lab <lab> changed its status while the job ran...`. If the other job writes
+first, Inspect Lab fails with `Lab <lab> changed while the job ran, so the job wrote nothing. Run the job again.`.
+A build or an edit of the lab during the job gives the same failure. Then run Inspect Lab again.
+
+#### Rename or move a lab
+
+Inspect Lab stops for a renamed lab, as Deploy Lab does. Run Build Lab Topology again first.
+
+Destroy a lab before you change its host. Inspect Lab and Destroy Lab read the new host. If the new host has no lab
+of that name, Inspect Lab sets Destroyed while the lab runs on the old host.
+
+#### The job log of an inspect
+
+An inspect ends with one summary line:
+
+`Inspected lab <lab> on host <host>: <nodes> nodes, <running> running, <warnings> warnings. Status: <status>.`
+
+The job result holds only the node, running, and warning counts. From the containers, the job log holds only the
+container name, the node name, and the management address. It does not hold the state, the owner, the image, or the
+topology paths. The rules of "The job log of a deploy" also apply.
+
+#### Time limits
+
+The job has a soft time limit of 700 seconds and a hard time limit of 800 seconds. The job makes two calls to the
+host: login and inspect. With the default `request_timeout` of 300 seconds, the calls take up to 2 x (10 + 300) = 620
+seconds. The rest is for the database work.
+
+If you set a larger `request_timeout`, set the soft time limit to 2 x `request_timeout` + 100, and the hard time
+limit to 100 seconds more. Change the limits on the edit page of the job.
+
+If the login token ends during the inspect call, the job logs in again and sends the call again. Then the job makes
+four calls, up to 1240 seconds, and the soft time limit can stop it. The job then fails with
+`Lab <lab>: the job time limit stopped the inspect. The lab did not change.` Run the job again.
 
 ### Startup configs
 
