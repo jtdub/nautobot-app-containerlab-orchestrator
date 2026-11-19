@@ -78,6 +78,15 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertNotIn("Authorization", request.headers)
         self.assertEqual(client.token, TOKEN)
 
+    def test_login_keeps_the_host_user(self):
+        self.send.return_value = login_response()
+        username_variable = secret_variable_name(SecretsGroupSecretTypeChoices.TYPE_USERNAME)
+        with mock.patch.dict(os.environ, {username_variable: "clab-user"}):
+            client = ClabApiClient(self.host)
+            self.assertIsNone(client.username)
+            client.login()
+        self.assertEqual(client.username, "clab-user")
+
     def test_login_without_token_in_body_raises_error(self):
         for body in ({}, {"token": ""}, {"token": 5}, []):
             with self.subTest(body=body):

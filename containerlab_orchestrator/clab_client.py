@@ -67,6 +67,7 @@ class ClabApiClient:
         self.host = host
         self.base_url = host.remote_url.rstrip("/")
         self.token = None
+        self.username = None
         self.session = requests.Session()
         self.session.trust_env = False
         self.session.verify = host.verify_ssl
@@ -78,7 +79,7 @@ class ClabApiClient:
         self.session.close()
 
     def login(self):
-        """Log in with the HTTP(S) credentials of the host and keep the token.
+        """Log in with the HTTP(S) credentials of the host, and keep the token and the host user.
 
         Raises:
             ClabApiError: If a secret is not available, or the server returns no token.
@@ -92,6 +93,7 @@ class ClabApiClient:
         if not isinstance(token, str) or not token:
             raise ClabApiError(f"Host {self.host}: login returned no token.", status_code=response.status_code)
         self.token = token
+        self.username = username
 
     def list_images(self):
         """Return the container images on the host."""
