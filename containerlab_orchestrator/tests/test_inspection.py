@@ -589,7 +589,7 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
         def save_then_list(_name):
             Lab.objects.get(pk=self.lab.pk).save()
             changed["state"] = self._state()
-            return [dict(container, state="exited") for container in self.containers]
+            return [dict(container) for container in self.containers]
 
         for skip_unchanged in (False, True):
             with self.subTest(skip_unchanged=skip_unchanged):
