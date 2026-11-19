@@ -70,6 +70,9 @@ INSPECT_TIME_LIMIT_MESSAGE = "Lab {lab}: the job time limit stopped the inspect.
 RUNNING = "running"
 """The container state of a node that runs."""
 
+CONTAINER_STATUS_KEY = "status"
+"""The container key with the uptime text, which changes on each inspect."""
+
 
 class Found(enum.Enum):
     """What the inspect call found on the host."""
@@ -88,11 +91,20 @@ class InspectStatuses(NamedTuple):
 
 
 class InspectResult(NamedTuple):
-    """The saved lab, the node and running counts, and the warnings of an inspect."""
+    """The saved lab, the node and running counts, the warnings, and True if the job saved the lab."""
 
     lab: Lab
     node_count: int
     running_count: int
+    warnings: list
+    saved: bool = True
+
+
+class InspectRead(NamedTuple):
+    """The container list, what the inspect call found, and the warnings of the call."""
+
+    containers: list
+    found: Found
     warnings: list
 
 
@@ -132,14 +144,17 @@ def inspect_statuses():
     )
 
 
-def inspect_on_host(client, lab, statuses):
-    """Inspect the lab with a client that is logged in, and write the result."""
-    containers, found, warnings = _read_containers(client, lab)
-    return _write_inspect(lab, statuses, containers, found, warnings)
+def inspect_on_host(client, lab, statuses, skip_unchanged=False):
+    """Inspect the lab with a client that is logged in, and write the result.
+
+    With `skip_unchanged` True, the job does not save a lab with no change. The order of the containers and the
+    `status` key of each container do not count.
+    """
+    return write_inspect(lab, statuses, read_containers(client, lab), skip_unchanged)
 
 
-def _read_containers(client, lab):
-    """Return the container list, what the call found, and the warnings of the inspect call.
+def read_containers(client, lab):
+    """Return the container list, what the call found, and the warnings of the inspect call as an InspectRead.
 
     Raises:
         ValidationError: If the inspect call fails with an error that does not tell what the host has, the result is
@@ -151,9 +166,9 @@ def _read_containers(client, lab):
     except ClabApiError as error:
         if error.status_code == HTTPStatus.NOT_FOUND:
             if error.server_message == PLAIN_NOT_FOUND.format(lab=lab.name):
-                return [], Found.NONE_LEFT, [NOT_FOUND_WARNING.format(host=lab.host, lab=lab)]
+                return InspectRead([], Found.NONE_LEFT, [NOT_FOUND_WARNING.format(host=lab.host, lab=lab)])
             if error.server_message == HELPERS_NOT_FOUND.format(lab=lab.name):
-                return [], Found.HELPERS_LEFT, [HELPERS_WARNING.format(host=lab.host, lab=lab)]
+                return InspectRead([], Found.HELPERS_LEFT, [HELPERS_WARNING.format(host=lab.host, lab=lab)])
             if error.server_message == NOT_OWNED_NOT_FOUND.format(lab=lab.name):
                 raise ValidationError(INSPECT_NOT_OWNED_MESSAGE.format(host=lab.host, lab=lab)) from error
         if HTTPStatus.OK <= (error.status_code or 0) < HTTPStatus.MULTIPLE_CHOICES:
@@ -162,7 +177,7 @@ def _read_containers(client, lab):
     if not isinstance(containers, list):
         raise ValidationError(unreadable)
     _check_owner(client, lab, containers)
-    return containers, Found.LISTED if containers else Found.NONE_LEFT, []
+    return InspectRead(containers, Found.LISTED if containers else Found.NONE_LEFT, [])
 
 
 def _check_owner(client, lab, containers):
@@ -188,16 +203,24 @@ def _strong_match(containers, rows):
     return images == {row.node_name: normalize_image(row.image) for row in rows}
 
 
-def _write_inspect(lab, statuses, containers, found, warnings):
+def write_inspect(lab, statuses, read, skip_unchanged=False):
     """Write the node rows, the stored inspect result, and the status in one transaction on the locked lab row.
+
+    With `skip_unchanged` True, the job does not save a lab with no change.
 
     Raises:
         ValidationError: If the lab row is gone, or its status or last update time changed after the job read it.
     """
+    containers, found, warnings = read
     with transaction.atomic():
         locked = lock_lab(lab, INSPECT_DELETED_MESSAGE)
         if locked.status_id != lab.status_id or locked.last_updated != lab.last_updated:
             raise ValidationError(INSPECT_GUARD_MESSAGE.format(lab=lab))
+        before = (
+            _snapshot(locked.status_id, locked.lab_nodes.order_by("node_name"), locked.last_inspect)
+            if skip_unchanged
+            else None
+        )
         written = write_node_state(locked, locked.topology_yaml, containers, warnings)
         running = [row.node_name for row in written.rows if row.state == RUNNING]
         not_running = sorted({row.node_name for row in written.rows} - set(running))
@@ -213,8 +236,35 @@ def _write_inspect(lab, statuses, containers, found, warnings):
             warnings.append(NOT_RUNNING_WARNING.format(lab=lab, nodes=", ".join(not_running)))
         if new_status:
             locked.status = new_status
-        locked.save(update_fields=["status", "last_inspect", "last_updated"])
-    return InspectResult(locked, len(written.rows), len(running), warnings)
+        saved = not skip_unchanged or _snapshot(locked.status_id, written.rows, locked.last_inspect) != before
+        if saved:
+            locked.save(update_fields=["status", "last_inspect", "last_updated"])
+    return InspectResult(locked, len(written.rows), len(running), warnings, saved)
+
+
+def _snapshot(status_id, rows, last_inspect):
+    """Return the values that the no change rule compares."""
+    return status_id, _row_values(rows), _normal_inspect(last_inspect)
+
+
+def _row_values(rows):
+    """Return the node name, the state, the container ID, and the management address of each row, in order."""
+    return tuple((row.node_name, row.state, row.container_id, row.mgmt_ipv4) for row in rows)
+
+
+def _normal_inspect(value):
+    """Return a stored inspect result in a form that ignores the container order and the uptime text.
+
+    Remove the `status` key from each dict item, and sort the dict items by node name, then container name. The
+    other items follow in their order. A value that is not a list stays the same.
+    """
+    if not isinstance(value, list):
+        return value
+    items = [item for item in value if isinstance(item, dict)]
+    others = [item for item in value if not isinstance(item, dict)]
+    normal = [{key: item_value for key, item_value in item.items() if key != CONTAINER_STATUS_KEY} for item in items]
+    normal.sort(key=lambda item: (str(item.get("nodeName", "")), str(item.get("name", ""))))
+    return normal + others
 
 
 def _new_status(lab, statuses, found, not_running):

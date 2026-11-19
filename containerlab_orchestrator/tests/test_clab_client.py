@@ -351,6 +351,25 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertFalse(context.exception.timed_out)
         self.assertIn("cannot reach", context.exception.message)
 
+    def test_cannot_reach_error_is_unreachable(self):
+        self.assertFalse(ClabApiError("x").unreachable)
+        transport_errors = (
+            (requests.ConnectionError("refused"), True),
+            (requests.ConnectTimeout("connect timed out"), True),
+            (requests.exceptions.SSLError("bad certificate"), True),
+            (requests.exceptions.ChunkedEncodingError("broken body"), True),
+            (requests.exceptions.InvalidURL("bad URL"), True),
+            (requests.ReadTimeout("read timed out"), False),
+            (requests.ConnectionError(ProtocolError("Connection aborted.")), False),
+        )
+        for transport_error, unreachable in transport_errors:
+            with self.subTest(error=repr(transport_error)):
+                self.send.side_effect = transport_error
+                with self.assertRaises(ClabApiError) as context:
+                    self.logged_in_client().list_images()
+                self.assertIs(context.exception.unreachable, unreachable)
+                self.assertIs(context.exception.timed_out, not unreachable)
+
     def test_requests_use_verify_ssl_of_host(self):
         for verify_ssl in (True, False):
             with (
