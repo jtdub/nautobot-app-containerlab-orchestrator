@@ -1,0 +1,3 @@
+Changed the Deploy Lab and Redeploy Lab jobs, which now write the management address that the host reports to each node row.
+Changed the Deploy Lab and Redeploy Lab jobs, which now warn about a container with no node row or an address that differs from the build.
+Changed the Deploy Lab, Redeploy Lab, and Destroy Lab jobs, which now keep the host container list in the last_inspect field of the REST API.

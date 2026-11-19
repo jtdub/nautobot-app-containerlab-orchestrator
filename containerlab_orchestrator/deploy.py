@@ -1,5 +1,6 @@
 """Deploy the stored topology of a lab to its host, and record the status and the node state."""
 
+import ipaddress
 import json
 from contextlib import suppress
 from http import HTTPStatus
@@ -58,6 +59,14 @@ NEW_BUILD_WARNING = (
 )
 """The warning for a build that wrote a new topology during the deploy."""
 
+UNKNOWN_CONTAINERS_WARNING = "Host {host} has containers of lab {lab} with no node row: {names}."
+"""The warning for containers of the inspect result whose node name is not a node row of the lab."""
+
+ADDRESS_WARNING = (
+    "Node {node} of lab {lab} has the management address {live} on host {host}, but the build gave {planned}."
+)
+"""The warning for a live management address that is not the planned address of the node."""
+
 STATUS_CHANGED_MESSAGE = "Lab {lab} changed its status during the deploy, so the job did not set Failed."
 """The message for a Failed write that the job skipped because the status changed."""
 
@@ -96,6 +105,13 @@ class DeployResult(NamedTuple):
     node_count: int
     state_count: int
     warnings: list
+
+
+class NodeWrite(NamedTuple):
+    """The node rows that the job wrote, and the names of the rows that got a container."""
+
+    rows: list
+    matched: frozenset
 
 
 class DeployTimeLimit(SoftTimeLimitExceeded):
@@ -301,7 +317,7 @@ def deploy_step(client, lab, statuses, replace_existing):
 
 
 def inspect_step(client, lab, statuses):
-    """Return the containers of the lab and the warnings of the inspect call.
+    """Return the containers of the lab, or None for no result, and the warnings of the inspect call.
 
     Raises:
         SoftTimeLimitExceeded: If the Celery soft time limit stops the call. The lab is Deployed first.
@@ -309,13 +325,13 @@ def inspect_step(client, lab, statuses):
     try:
         containers = client.inspect(lab.name)
     except ClabApiError as error:
-        return [], [INSPECT_WARNING.format(lab=lab, error=error_text(error))]
+        return None, [INSPECT_WARNING.format(lab=lab, error=error_text(error))]
     except SoftTimeLimitExceeded:
         with suppress(ValidationError):
-            write_deployed(lab, statuses.deployed, [], [])
+            write_deployed(lab, statuses.deployed, None, [])
         raise
     if not isinstance(containers, list):
-        return [], [INSPECT_WARNING.format(lab=lab, error=NOT_A_LIST)]
+        return None, [INSPECT_WARNING.format(lab=lab, error=NOT_A_LIST)]
     return containers, []
 
 
@@ -336,7 +352,7 @@ def lock_lab(lab, deleted_message=LAB_DELETED_MESSAGE):
 
 
 def write_failed(lab, failed, deleted_message=LAB_DELETED_MESSAGE):
-    """Set the Failed status, and return False if the status changed after the job read it.
+    """Set the Failed status and an empty stored inspect result, and return False if the status changed.
 
     Args:
         lab: The lab that the job read at its start.
@@ -348,14 +364,16 @@ def write_failed(lab, failed, deleted_message=LAB_DELETED_MESSAGE):
         if locked.status_id != lab.status_id:
             return False
         locked.status = failed
-        locked.save(update_fields=["status", "last_updated"])
+        locked.last_inspect = {}
+        locked.save(update_fields=["status", "last_inspect", "last_updated"])
     return True
 
 
 def write_deployed(lab, deployed, containers, warnings):
-    """Write the node state of each row and the Deployed status in one transaction.
+    """Write the node rows, the stored inspect result, and the Deployed status in one transaction.
 
-    A row with no container gets an empty state and container ID. A new build during the deploy adds a warning.
+    Containers of None give the stored inspect result `{}`. A new build during the deploy adds a warning, and the rows
+    then get no planned address.
 
     Returns:
         The saved lab, and the count of rows that got a container.
@@ -367,23 +385,88 @@ def write_deployed(lab, deployed, containers, warnings):
         locked = lock_lab(lab)
         if locked.status_id != lab.status_id:
             raise ValidationError(STATUS_GUARD_DEPLOYED_MESSAGE.format(lab=lab, host=lab.host))
-        if locked.built_at != lab.built_at:
+        new_build = locked.built_at != lab.built_at
+        if new_build:
             warnings.append(NEW_BUILD_WARNING.format(lab=lab))
-        by_node = {
-            container["nodeName"]: container
-            for container in containers
-            if isinstance(container, dict) and isinstance(container.get("nodeName"), str)
-        }
-        rows = list(locked.lab_nodes.all())
-        for row in rows:
-            container = by_node.get(row.node_name, {})
-            row.state = _container_text(container.get("state"))
-            row.container_id = _container_text(container.get("container_id"))
-        LabNode.objects.bulk_update(rows, ["state", "container_id"])
-        state_count = sum(row.node_name in by_node for row in rows)
+        written = write_node_state(locked, None if new_build else lab.topology_yaml, containers, warnings)
         locked.status = deployed
-        locked.save(update_fields=["status", "last_updated"])
-    return locked, state_count
+        locked.save(update_fields=["status", "last_inspect", "last_updated"])
+    return locked, len(written.matched)
+
+
+def write_node_state(locked, topology_yaml, containers, warnings):
+    """Write the state, the container ID, and the management address of each node row, and add the warnings.
+
+    Set `last_inspect` on the locked lab, and do not save it. Containers of None mean no result. A topology YAML of
+    None gives no planned address.
+    """
+    by_node = {
+        container["nodeName"]: container
+        for container in containers or []
+        if isinstance(container, dict) and isinstance(container.get("nodeName"), str) and container["nodeName"]
+    }
+    planned = _planned_addresses(topology_yaml)
+    rows = list(locked.lab_nodes.order_by("node_name"))
+    for row in rows:
+        container = by_node.get(row.node_name, {})
+        row.state = _container_text(container.get("state"))
+        row.container_id = _container_text(container.get("container_id"))
+        live = _live_address(container.get("ipv4_address"))
+        plan = planned.get(row.node_name)
+        if live and plan and live != plan:
+            warnings.append(
+                ADDRESS_WARNING.format(node=row.node_name, lab=locked, live=live, host=locked.host, planned=plan)
+            )
+        row.mgmt_ipv4 = live or plan or row.mgmt_ipv4
+    LabNode.objects.bulk_update(rows, ["state", "container_id", "mgmt_ipv4"])
+    row_names = {row.node_name for row in rows}
+    names = _unknown_names(containers, row_names)
+    if names:
+        warnings.append(UNKNOWN_CONTAINERS_WARNING.format(host=locked.host, lab=locked, names=", ".join(names)))
+    locked.last_inspect = containers if containers is not None else {}
+    return NodeWrite(rows, frozenset(by_node) & row_names)
+
+
+def _unknown_names(containers, row_names):
+    """Return the sorted names of the dict items whose node name is not a row name."""
+    names = []
+    for container in containers or []:
+        if not isinstance(container, dict):
+            continue
+        node_name = container.get("nodeName")
+        if isinstance(node_name, str) and node_name in row_names:
+            continue
+        label = next((value for value in (container.get("name"), node_name) if isinstance(value, str) and value), "?")
+        names.append(_container_text(label))
+    return sorted(names)
+
+
+def _planned_addresses(topology_yaml):
+    """Return the planned address of each topology node, or an empty mapping for a topology that the job cannot read."""
+    try:
+        topology = yaml.safe_load(topology_yaml) if topology_yaml else None
+    except yaml.YAMLError:
+        return {}
+    section = topology.get("topology") if isinstance(topology, dict) else None
+    nodes = section.get("nodes") if isinstance(section, dict) else None
+    if not isinstance(nodes, dict):
+        return {}
+    addresses = {}
+    for name, node in nodes.items():
+        address = _live_address(node.get("mgmt-ipv4")) if isinstance(node, dict) else None
+        if address:
+            addresses[name] = address
+    return addresses
+
+
+def _live_address(value):
+    """Return the IPv4 address before the `/` of the value, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(ipaddress.IPv4Address(value.partition("/")[0]))
+    except ValueError:
+        return None
 
 
 def _container_text(value):
