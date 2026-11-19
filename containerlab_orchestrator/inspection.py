@@ -236,11 +236,10 @@ def write_inspect(lab, statuses, read, skip_unchanged=False):
             warnings.append(NOT_RUNNING_WARNING.format(lab=lab, nodes=", ".join(not_running)))
         if new_status:
             locked.status = new_status
-        result = InspectResult(locked, len(written.rows), len(running), warnings)
-        if before is not None and _snapshot(locked.status_id, written.rows, locked.last_inspect) == before:
-            return result._replace(saved=False)
-        locked.save(update_fields=["status", "last_inspect", "last_updated"])
-    return result
+        saved = not skip_unchanged or _snapshot(locked.status_id, written.rows, locked.last_inspect) != before
+        if saved:
+            locked.save(update_fields=["status", "last_inspect", "last_updated"])
+    return InspectResult(locked, len(written.rows), len(running), warnings, saved)
 
 
 def _snapshot(status_id, rows, last_inspect):

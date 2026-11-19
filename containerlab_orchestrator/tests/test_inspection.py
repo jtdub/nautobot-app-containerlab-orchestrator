@@ -476,16 +476,17 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
             container["status"] = "Up 1 hours"
         inspect_lab(self.lab)
 
+    def _fresh_lab(self):
+        """Return a fresh read of the lab, as the job reads it at its start."""
+        return Lab.objects.select_related("status", "host").get(pk=self.lab.pk)
+
     def _inspect(self, skip_unchanged=True):
         """Inspect a fresh read of the lab with the mocked client, and return the result."""
-        lab = Lab.objects.select_related("status", "host").get(pk=self.lab.pk)
-        return inspect_on_host(self.client_mock, lab, inspect_statuses(), skip_unchanged=skip_unchanged)
+        return inspect_on_host(self.client_mock, self._fresh_lab(), inspect_statuses(), skip_unchanged=skip_unchanged)
 
     def _list(self, **changes):
         """Make the mocked client list a copy of the containers, with these keys changed in each container."""
-        listed = [dict(container, **changes) for container in self.containers]
-        self.client_mock.inspect.return_value = listed
-        return listed
+        self.client_mock.inspect.return_value = [dict(container, **changes) for container in self.containers]
 
     def _make_current(self):
         """Set Deployed, and inspect the current containers, so the lab holds the current values."""
@@ -573,7 +574,7 @@ class InspectLabSkipTestCase(InspectLabTestCase):  # pylint: disable=too-many-an
         for skip_unchanged in (False, True):
             with self.subTest(skip_unchanged=skip_unchanged):
                 self._make_current()
-                lab = Lab.objects.select_related("status", "host").get(pk=self.lab.pk)
+                lab = self._fresh_lab()
                 self.client_mock.inspect.side_effect = save_then_list
                 try:
                     with self.assertRaises(ValidationError) as raised:
