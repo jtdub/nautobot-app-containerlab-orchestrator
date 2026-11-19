@@ -390,6 +390,7 @@ class InspectLabFailureTestCase(InspectLabTestCase):  # pylint: disable=too-many
             "other user": [arista1, {**leaf1, "owner": "other-user"}],
             "no owner": [arista1, no_owner],
             "empty owner": [arista1, {**leaf1, "owner": ""}],
+            "owner in another case": [arista1, {**leaf1, "owner": HOST_USER.upper()}],
         }
         for start in (LabStatusChoices.DEPLOYED, LabStatusChoices.BUILT):
             for case, containers in cases.items():

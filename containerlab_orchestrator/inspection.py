@@ -100,8 +100,8 @@ def inspect_lab(lab):
     """Read the containers of the lab on its host, and write the node rows, the stored result, and the status.
 
     Raises:
-        ValidationError: If the lab or its topology cannot inspect, a client call fails, the host user does not own
-            the lab, or the lab changed during the job.
+        ValidationError: If the lab cannot inspect, its stored topology is not valid, a client call fails, another
+            user of the host owns the lab, or the lab changed during the job.
     """
     current = Lab.objects.select_related("status", "host").get(pk=lab.pk)
     if current.status.name not in INSPECT_STATUSES:
