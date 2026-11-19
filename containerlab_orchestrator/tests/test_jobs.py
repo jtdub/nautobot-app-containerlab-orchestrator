@@ -1,12 +1,14 @@
-"""Tests for the Build Lab Topology, Deploy Lab, Destroy Lab, and Redeploy Lab jobs."""
+"""Tests for the Build Lab Topology, Deploy Lab, Destroy Lab, Redeploy Lab, and Inspect Lab jobs."""
 
 from unittest import mock
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from nautobot.apps.choices import JobResultStatusChoices, LogLevelChoices
 from nautobot.apps.testing import TransactionTestCase, create_job_result_and_run_job
+from nautobot.core.utils.logging import sanitize
 from nautobot.dcim.models import Device
 from nautobot.extras.models import Job, Status
 
@@ -18,6 +20,7 @@ from containerlab_orchestrator.deploy import (
     INSPECT_WARNING,
     MISSING_IMAGES_MESSAGE,
     TIME_LIMIT_MESSAGE,
+    UNKNOWN_CONTAINERS_WARNING,
     DeployTimeLimit,
 )
 from containerlab_orchestrator.destroy import (
@@ -26,9 +29,11 @@ from containerlab_orchestrator.destroy import (
     NOT_FOUND_WARNING,
     DestroyTimeLimit,
 )
+from containerlab_orchestrator.inspection import INSPECT_NOT_OWNED_MESSAGE, INSPECT_TIME_LIMIT_MESSAGE
 from containerlab_orchestrator.jobs import (
     DEPLOY_SUMMARY,
     DESTROY_SUMMARY,
+    INSPECT_SUMMARY,
     KEEP_DIRECTORY_HELP,
     NO_CHANGE_MESSAGE,
     NO_VIEW_MESSAGE,
@@ -38,7 +43,9 @@ from containerlab_orchestrator.jobs import (
     SUMMARY_MESSAGE,
     DeployLab,
     DestroyLab,
+    InspectLab,
     RedeployLab,
+    lab_access_message,
 )
 from containerlab_orchestrator.models import Lab, LabNode, NodeMapping
 from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE
@@ -664,3 +671,170 @@ class RedeployLabJobTestCase(LabJobTestCase):
                 self.assertIn(raised.__name__, job_result.traceback or "")
                 self.assertEqual(self.status_of(), LabStatusChoices.FAILED)
                 self.assertEqual(self.client_mock.deploy.call_count, int(call == "deploy"))
+
+
+class InspectLabJobTestCase(LabJobTestCase):
+    """Run the Inspect Lab job on the Deployed lab-a of clab01."""
+
+    job_class_name = "InspectLab"
+    patch_target = "containerlab_orchestrator.inspection.ClabApiClient"
+    start_status = LabStatusChoices.DEPLOYED
+    host_user = "clab-user"
+
+    def setUp(self):
+        """Make the host user own each container of the inspect result."""
+        super().setUp()
+        self.client_mock.username = self.host_user
+        for container in self.client_mock.inspect.return_value:
+            container["owner"] = self.host_user
+
+    def failures(self, job_result):
+        """Return the failure messages of the job log."""
+        return BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
+
+    def summary(self, running, warnings, status):
+        """Return the summary line of an inspect of the three nodes of lab-a of clab01."""
+        return INSPECT_SUMMARY.format(
+            lab=self.lab_a, host=self.lab_a.host, nodes=3, running=running, warnings=warnings, status=status
+        )
+
+    def test_inspect_job_is_registered_with_time_limits(self):
+        job_model = Job.objects.get(module_name=JOB_MODULE, job_class_name="InspectLab")
+        self.assertEqual(job_model.name, "Inspect Lab")
+        self.assertEqual(job_model.grouping, "Containerlab Orchestrator")
+        self.assertEqual(
+            job_model.description,
+            "Read the containers of a lab on its containerlab host, and record the node state and the lab status. "
+            "The job changes nothing on the host.",
+        )
+        self.assertEqual((job_model.soft_time_limit, job_model.time_limit), (700, 800))
+        self.assertFalse(job_model.has_sensitive_variables)
+        self.assertFalse(job_model.enabled)
+        self.assertEqual(list(InspectLab._get_vars()), ["lab"])  # pylint: disable=protected-access
+        self.assertEqual(InspectLab.lab.as_field().help_text, "The lab to inspect.")
+
+    def test_owner_inspect_succeeds_with_summary(self):
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result)
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+        self.assertEqual(
+            self.client_mock.method_calls, [mock.call.login(), mock.call.inspect("lab-a"), mock.call.close()]
+        )
+        successes = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_SUCCESS)
+        self.assertEqual(successes, [self.summary(3, 0, LabStatusChoices.DEPLOYED), "Job completed"])
+        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_WARNING), [])
+        self.assertEqual(job_result.result, {"nodes": 3, "running": 3, "warnings": 0})
+
+    def test_user_who_is_not_the_owner_can_inspect(self):
+        get_user_model().objects.create_user(username="inspect-admin", is_superuser=True)
+        cases = (("bob", self.lab_a.owner), ("bob", None), ("inspect-admin", self.lab_a.owner))
+        for username, owner in cases:
+            with self.subTest(username=username, owner=owner):
+                Lab.objects.filter(pk=self.lab_a.pk).update(owner=owner)
+                self.client_mock.reset_mock()
+                job_result = self.run_job(username)
+                self.assertJobResultStatus(job_result)
+                self.assertEqual(self.failures(job_result), [])
+                self.client_mock.inspect.assert_called_once_with("lab-a")
+                self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+
+    def test_access_check_keeps_the_owner_check_by_default(self):
+        bob = self.users["bob"]
+        not_owner = NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="inspect")
+        self.assertEqual(lab_access_message(self.lab_a, bob, "inspect"), not_owner)
+        self.assertEqual(lab_access_message(self.lab_a, bob, "inspect", owner_check=False), "")
+
+    def test_user_who_cannot_view_the_lab_gets_a_message_with_no_name(self):
+        grant_permission(self.users["carol"], Lab, "view", constraints={"name": "lab-b"})
+        job_result = self.run_job("carol")
+        self.assert_access_failed_with(job_result, NO_VIEW_MESSAGE.format(verb="inspect"))
+        self.assertEqual(self.failures(job_result), ["You cannot inspect this lab."])
+        for entry in job_result.job_log_entries.all():
+            with self.subTest(message=entry.message):
+                self.assertNotIn("lab-a", entry.message)
+                self.assertNotIn("lab-a", entry.log_object)
+
+    def test_user_without_change_permission_fails(self):
+        grant_permission(self.users["carol"], Lab, "view")
+        job_result = self.run_job("carol")
+        self.assert_access_failed_with(job_result, NO_CHANGE_MESSAGE.format(lab=self.lab_a, verb="inspect"))
+        self.assertEqual(self.failures(job_result), ["You need the change permission on lab lab-a to inspect it."])
+
+    def test_lab_not_on_host_sets_destroyed_with_warning(self):
+        self.client_mock.inspect.side_effect = ClabApiError(
+            "Host clab01: GET /api/v1/labs/lab-a returned HTTP 404: lab 'lab-a' not found",
+            status_code=404,
+            server_message="lab 'lab-a' not found",
+        )
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result)
+        self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
+        warning = NOT_FOUND_WARNING.format(host=self.lab_a.host, lab=self.lab_a)
+        entries = job_result.job_log_entries.filter(
+            log_level__in=[LogLevelChoices.LOG_WARNING, LogLevelChoices.LOG_SUCCESS]
+        ).order_by("created")
+        self.assertEqual(
+            list(entries.values_list("message", flat=True)),
+            [warning, self.summary(0, 1, LabStatusChoices.DESTROYED), "Job completed"],
+        )
+        self.assertEqual(job_result.result, {"nodes": 3, "running": 0, "warnings": 1})
+
+    def test_api_error_fails_and_keeps_status(self):
+        message = "Host clab01: GET /api/v1/labs/lab-a returned HTTP 500: inspect failed"
+        self.client_mock.inspect.side_effect = ClabApiError(message, status_code=500, server_message="inspect failed")
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.failures(job_result), [message])
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+        self.assertIsNone(job_result.result)
+
+    def test_not_owned_message_is_not_redacted_in_the_job_log(self):
+        for container in self.client_mock.inspect.return_value:
+            container["owner"] = "other-user"
+        message = INSPECT_NOT_OWNED_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
+        self.assertEqual(sanitize(message), message)
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.failures(job_result), [message])
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+
+    def test_each_message_of_an_error_is_one_line(self):
+        error = ValidationError(["First message.", "Second message."])
+        with mock.patch("containerlab_orchestrator.jobs.inspect_lab", side_effect=error):
+            job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.failures(job_result), ["First message.", "Second message."])
+
+    def test_time_limit_logs_the_message_and_raises(self):
+        self.client_mock.inspect.side_effect = SoftTimeLimitExceeded()
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.failures(job_result), [INSPECT_TIME_LIMIT_MESSAGE.format(lab=self.lab_a)])
+        self.assertIn(SoftTimeLimitExceeded.__name__, job_result.traceback or "")
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+        self.client_mock.close.assert_called_once_with()
+
+    def test_job_log_and_result_hold_only_the_names(self):
+        marker_user = "MARKER-20-user"
+        self.client_mock.username = marker_user
+        containers = [
+            {
+                **container,
+                "owner": marker_user,
+                "image": "MARKER-20-image",
+                "labPath": "MARKER-20/lab-a.clab.yml",
+                "absLabPath": "/home/MARKER-20/lab-a.clab.yml",
+            }
+            for container in self.client_mock.inspect.return_value
+        ]
+        sshx = {"name": "clab-lab-a-sshx", "nodeName": "", "owner": marker_user, "state": "MARKER-20-state"}
+        self.client_mock.inspect.return_value = [*containers, sshx]
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result)
+        warning = UNKNOWN_CONTAINERS_WARNING.format(host=self.lab_a.host, lab=self.lab_a, names="clab-lab-a-sshx")
+        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_WARNING), [warning])
+        self.assertEqual(job_result.result, {"nodes": 3, "running": 3, "warnings": 1})
+        for entry in job_result.job_log_entries.all():
+            with self.subTest(message=entry.message):
+                self.assertNotIn("MARKER-20", entry.message)
+        self.assertNotIn("MARKER-20", str(job_result.result))

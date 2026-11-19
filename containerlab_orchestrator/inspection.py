@@ -51,7 +51,7 @@ NO_MATCH_WARNING = (
 
 INSPECT_NOT_OWNED_MESSAGE = (
     "Host {host} has a lab named {lab} that another user of the host owns. The job did not read it. "
-    "Check the Secrets Group of host {host}."
+    "Check the credentials of host {host}."
 )
 """The error for an inspect that found a lab of another user of the host."""
 

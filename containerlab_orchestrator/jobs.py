@@ -7,6 +7,7 @@ from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.deploy import TIME_LIMIT_MESSAGE, DeployTimeLimit, deploy_lab
 from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, DestroyTimeLimit, destroy_lab
+from containerlab_orchestrator.inspection import INSPECT_TIME_LIMIT_MESSAGE, inspect_lab
 from containerlab_orchestrator.models import Lab
 from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE, redeploy_lab
 
@@ -45,27 +46,33 @@ KEEP_DIRECTORY_HELP = (
 REDEPLOY_SUMMARY = "Redeployed lab {lab} on host {host}: {nodes} nodes, {states} node states, {warnings} warnings."
 """The success line of a redeploy."""
 
+INSPECT_SUMMARY = (
+    "Inspected lab {lab} on host {host}: {nodes} nodes, {running} running, {warnings} warnings. Status: {status}."
+)
+"""The success line of an inspect."""
 
-def lab_access_message(lab, user, verb):
+
+def lab_access_message(lab, user, verb, owner_check=True):
     """Return the reason that the user cannot do the verb on the lab, or an empty string if the user can.
 
-    The view check comes first, so a user who cannot view the lab gets a message that names no lab.
+    The view check comes first, so a user who cannot view the lab gets a message that names no lab. With
+    `owner_check` False, the user does not need to be the owner of the lab or a superuser.
     """
     if not Lab.objects.restrict(user, "view").filter(pk=lab.pk).exists():
         return NO_VIEW_MESSAGE.format(verb=verb)
-    if not (user.is_superuser or lab.owner_id == user.pk):
+    if owner_check and not (user.is_superuser or lab.owner_id == user.pk):
         return NOT_OWNER_MESSAGE.format(lab=lab, verb=verb)
     if not Lab.objects.restrict(user, "change").filter(pk=lab.pk).exists():
         return NO_CHANGE_MESSAGE.format(lab=lab, verb=verb)
     return ""
 
 
-def fail_access(job, lab, verb):
+def fail_access(job, lab, verb, owner_check=True):
     """Fail the job if its user cannot do the verb on the lab, and return True if it failed.
 
-    The failure for a user who cannot view the lab has no log object.
+    The failure for a user who cannot view the lab has no log object. `owner_check` goes to `lab_access_message`.
     """
-    message = lab_access_message(lab, job.user, verb)
+    message = lab_access_message(lab, job.user, verb, owner_check)
     if message == NO_VIEW_MESSAGE.format(verb=verb):
         job.fail(message)
     elif message:
@@ -278,5 +285,56 @@ class RedeployLab(Job):
         return {"nodes": result.node_count, "states": result.state_count, "warnings": len(result.warnings)}
 
 
-jobs = [BuildLabTopology, DeployLab, RedeployLab, DestroyLab]
+class InspectLab(Job):
+    """Read the containers of a lab on its containerlab host, and record the node state and the lab status."""
+
+    lab = ObjectVar(model=Lab, description="The lab to inspect.")
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """Job metadata."""
+
+        name = "Inspect Lab"
+        description = (
+            "Read the containers of a lab on its containerlab host, and record the node state and the lab status. "
+            "The job changes nothing on the host."
+        )
+        has_sensitive_variables = False
+        soft_time_limit = 700
+        time_limit = 800
+
+    def run(self, lab):  # pylint: disable=arguments-differ
+        """Check the access of the job user, inspect the lab, and log the warnings and a summary.
+
+        Returns:
+            The node, running, and warning counts of the inspect, or None if the inspect failed.
+
+        Raises:
+            SoftTimeLimitExceeded: If the Celery soft time limit stopped the inspect.
+        """
+        if fail_access(self, lab, "inspect", owner_check=False):
+            return None
+        try:
+            result = inspect_lab(lab)
+        except ValidationError as error:
+            for line in error_lines(error):
+                self.fail(line, extra={"object": lab})
+            return None
+        except SoftTimeLimitExceeded:
+            self.fail(INSPECT_TIME_LIMIT_MESSAGE.format(lab=lab), extra={"object": lab})
+            raise
+        for warning in result.warnings:
+            self.logger.warning(warning, extra={"object": result.lab})
+        summary = INSPECT_SUMMARY.format(
+            lab=result.lab,
+            host=result.lab.host,
+            nodes=result.node_count,
+            running=result.running_count,
+            warnings=len(result.warnings),
+            status=result.lab.status,
+        )
+        self.logger.success(summary, extra={"object": result.lab})
+        return {"nodes": result.node_count, "running": result.running_count, "warnings": len(result.warnings)}
+
+
+jobs = [BuildLabTopology, DeployLab, RedeployLab, DestroyLab, InspectLab]
 register_jobs(*jobs)
