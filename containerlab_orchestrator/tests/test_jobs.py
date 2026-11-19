@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 from django.test import override_settings
 from nautobot.apps.choices import JobResultStatusChoices, LogLevelChoices
 from nautobot.apps.testing import TransactionTestCase, create_job_result_and_run_job
+from nautobot.core.utils.logging import sanitize
 from nautobot.dcim.models import Device
 from nautobot.extras.models import Job, Status
 
@@ -28,7 +29,7 @@ from containerlab_orchestrator.destroy import (
     NOT_FOUND_WARNING,
     DestroyTimeLimit,
 )
-from containerlab_orchestrator.inspection import INSPECT_TIME_LIMIT_MESSAGE
+from containerlab_orchestrator.inspection import INSPECT_NOT_OWNED_MESSAGE, INSPECT_TIME_LIMIT_MESSAGE
 from containerlab_orchestrator.jobs import (
     DEPLOY_SUMMARY,
     DESTROY_SUMMARY,
@@ -786,6 +787,16 @@ class InspectLabJobTestCase(LabJobTestCase):
         self.assertEqual(self.failures(job_result), [message])
         self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
         self.assertIsNone(job_result.result)
+
+    def test_not_owned_message_is_not_redacted_in_the_job_log(self):
+        for container in self.client_mock.inspect.return_value:
+            container["owner"] = "other-user"
+        message = INSPECT_NOT_OWNED_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
+        self.assertEqual(sanitize(message), message)
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(self.failures(job_result), [message])
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
 
     def test_each_message_of_an_error_is_one_line(self):
         error = ValidationError(["First message.", "Second message."])

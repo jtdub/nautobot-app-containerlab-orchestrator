@@ -584,7 +584,9 @@ When the job fails, the status, the node rows, and the stored inspect result do 
 The job compares the owner of each container with the username of the Secrets Group of the host. If a container has
 another owner or no owner, the job fails with this message, and the lab does not change:
 
-`Host <host> has a lab named <lab> that another user of the host owns. The job did not read it. Check the Secrets Group of host <host>.`
+`Host <host> has a lab named <lab> that another user of the host owns. The job did not read it. Check the credentials of host <host>.`
+
+The job reads the credentials of the host from the Secrets Group of the host.
 
 The job fails in the same way when the host user is a clab-api-server superuser, or when another user shares the lab
 with the host user. In both cases, the containers have another owner. Use a host user that is not a clab-api-server
