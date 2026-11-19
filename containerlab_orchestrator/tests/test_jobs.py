@@ -769,9 +769,13 @@ class InspectLabJobTestCase(LabJobTestCase):
         self.assertJobResultStatus(job_result)
         self.assertEqual(self.status_of(), LabStatusChoices.DESTROYED)
         warning = NOT_FOUND_WARNING.format(host=self.lab_a.host, lab=self.lab_a)
-        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_WARNING), [warning])
-        successes = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_SUCCESS)
-        self.assertEqual(successes, [self.summary(0, 1, LabStatusChoices.DESTROYED), "Job completed"])
+        entries = job_result.job_log_entries.filter(
+            log_level__in=[LogLevelChoices.LOG_WARNING, LogLevelChoices.LOG_SUCCESS]
+        ).order_by("created")
+        self.assertEqual(
+            list(entries.values_list("message", flat=True)),
+            [warning, self.summary(0, 1, LabStatusChoices.DESTROYED), "Job completed"],
+        )
         self.assertEqual(job_result.result, {"nodes": 3, "running": 0, "warnings": 1})
 
     def test_api_error_fails_and_keeps_status(self):

@@ -586,8 +586,9 @@ another owner or no owner, the job fails with this message, and the lab does not
 
 `Host <host> has a lab named <lab> that another user of the host owns. The job did not read it. Check the Secrets Group of host <host>.`
 
-The job also fails when the host user is a clab-api-server superuser, or when the lab is shared. Use a host user that
-is not a clab-api-server superuser.
+The job fails in the same way when the host user is a clab-api-server superuser, or when another user shares the lab
+with the host user. In both cases, the containers have another owner. Use a host user that is not a clab-api-server
+superuser.
 
 The host reads the owner of a container from its `clab-owner` label. A tool container, such as SSHX or GoTTY,
 possibly has no such label. Then each Inspect Lab job of that lab fails with this message, and changes nothing. Check
@@ -612,9 +613,9 @@ The job also writes the stored inspect result. This is the `last_inspect` field 
 
 | Value | Meaning |
 |---|---|
-| A list of containers | The containers that the host gave to the last inspect of Inspect Lab, Deploy Lab, or Redeploy Lab. |
-| `[]` | The host had no container of the lab, or Destroy Lab removed the lab. |
-| `{}` | No result. The lab never had an inspect, an inspect call of Deploy Lab or Redeploy Lab failed, or a job set Failed. |
+| A list of containers | The containers that the host gave to the last inspect of Inspect Lab, Deploy Lab, or Redeploy Lab. A Failed status from Inspect Lab keeps the list, so you can see which node does not run. |
+| `[]` | The host had no container of the lab, the host had only helper containers, or Destroy Lab removed the lab. |
+| `{}` | No result. The lab never had an inspect, an inspect call of Deploy Lab or Redeploy Lab failed, or Deploy Lab, Redeploy Lab, or Destroy Lab set Failed. |
 
 Each user who can view the lab can read the stored inspect result. Each container in it holds the server user name
 (`owner`) and the path of the topology file on the host (`labPath` and `absLabPath`). It holds no secret.
