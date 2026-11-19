@@ -44,6 +44,7 @@ from containerlab_orchestrator.jobs import (
     DestroyLab,
     InspectLab,
     RedeployLab,
+    lab_access_message,
 )
 from containerlab_orchestrator.models import Lab, LabNode, NodeMapping
 from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE
@@ -735,6 +736,12 @@ class InspectLabJobTestCase(LabJobTestCase):
                 self.assertEqual(self.failures(job_result), [])
                 self.client_mock.inspect.assert_called_once_with("lab-a")
                 self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+
+    def test_access_check_keeps_the_owner_check_by_default(self):
+        bob = self.users["bob"]
+        not_owner = NOT_OWNER_MESSAGE.format(lab=self.lab_a, verb="inspect")
+        self.assertEqual(lab_access_message(self.lab_a, bob, "inspect"), not_owner)
+        self.assertEqual(lab_access_message(self.lab_a, bob, "inspect", owner_check=False), "")
 
     def test_user_who_cannot_view_the_lab_gets_a_message_with_no_name(self):
         grant_permission(self.users["carol"], Lab, "view", constraints={"name": "lab-b"})
