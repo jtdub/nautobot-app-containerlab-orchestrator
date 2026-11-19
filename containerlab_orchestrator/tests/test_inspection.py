@@ -362,6 +362,7 @@ class InspectLabFailureTestCase(InspectLabTestCase):  # pylint: disable=too-many
             "401": (inspect_error(401, "token expired"), None),
             "409": (inspect_error(409, "conflict"), None),
             "500": (inspect_error(500, "internal error"), None),
+            "500 with the not-owned text": (inspect_error(500, "lab 'build-lab' not found or not owned by user"), None),
             "read timeout": (ClabApiError("Host clab01: no response came in 300 seconds.", timed_out=True), None),
             "no connection": (ClabApiError("Host clab01: cannot reach http://clab01: ConnectionError."), None),
             "no status": (ClabApiError("Host clab01: the lab name is not valid."), None),
