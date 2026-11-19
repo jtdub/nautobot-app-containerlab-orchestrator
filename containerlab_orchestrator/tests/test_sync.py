@@ -77,6 +77,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         super().setUp()
         self._seed_old_values()
         self.answers = {}
+        self.login_errors = {}
         for lab in (self.lab_a, self.lab_b, self.lab_a_clab02):
             self.answers[(lab.host.name, lab.name)] = [
                 {
@@ -99,6 +100,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         """Return a new mocked client for the host, whose inspect gives the answer of the lab."""
         client = mock.create_autospec(ClabApiClient, instance=True)
         client.username = HOST_USER
+        client.login.side_effect = self.login_errors.get(host.name)
 
         def inspect(name):
             self.events.append(("read", host.name, name))
@@ -139,21 +141,13 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         """Return the summary of a failed lab with the error text."""
         return (lab, SyncKind.FAILED, self._line(SYNC_FAILED_LINE, lab, error=error))
 
-    def _synced(self, *labs):
-        """Return the summary of each lab that changed."""
-        return [(lab, SyncKind.CHANGED, "") for lab in labs]
+    def _synced(self, *labs, kind=SyncKind.CHANGED):
+        """Return the summary of each lab that synced with the kind."""
+        return [(lab, kind, "") for lab in labs]
 
-    def _login_fails_on_clab01(self, error):
-        """Make the login of the clab01 client raise the error."""
-        new_client = self._new_client
-
-        def client_for(host):
-            client = new_client(host)
-            if host.name == "clab01":
-                client.login.side_effect = error
-            return client
-
-        self.client_class.side_effect = client_for
+    def _unexpected(self, lab, error_type):
+        """Return the summary of a lab that failed with an unexpected error of the type."""
+        return (lab, SyncKind.FAILED, self._line(SYNC_ERROR_LINE, lab, error_type=error_type))
 
     def test_targets_are_deployed_or_failed_labs_the_user_can_change(self):
         with self.subTest("Built and Destroyed labs are out, a Failed lab is in"):
@@ -177,7 +171,6 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
             targets = sync_targets(self.sync_admin)
             self.assertIsInstance(targets, list)
             self.assertEqual(targets, [self.lab_a, self.lab_b, self.lab_a_clab02])
-            self.assertEqual(targets[0].host.name, "clab01")
 
     def test_one_login_for_each_host_and_each_client_closes(self):
         with mock.patch(WRITE_TARGET, side_effect=self._recorded_write):
@@ -207,7 +200,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         return write_inspect(lab, *args, **kwargs)
 
     def test_login_error_fails_each_lab_of_the_host_and_the_next_host_syncs(self):
-        self._login_fails_on_clab01(ClabApiError(LOGIN_ERROR, status_code=200))
+        self.login_errors["clab01"] = ClabApiError(LOGIN_ERROR, status_code=200)
         outcomes = self._run_sync()
         self.assertEqual(
             self._summary(outcomes),
@@ -223,18 +216,15 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
     def test_login_error_text_is_cut_as_in_the_other_jobs(self):
         server_text = "x" * (SERVER_TEXT_LIMIT + 50)
         message = f"Host clab01: POST /login returned HTTP 500: {server_text}"
-        self._login_fails_on_clab01(ClabApiError(message, status_code=500, server_message=server_text))
+        self.login_errors["clab01"] = ClabApiError(message, status_code=500, server_message=server_text)
         outcomes = self._run_sync()
         cut = message[: -len(server_text)] + server_text[:SERVER_TEXT_LIMIT]
         self.assertEqual(self._summary(outcomes)[:2], [self._failed(self.lab_a, cut), self._failed(self.lab_b, cut)])
 
     def test_unexpected_login_error_fails_each_lab_of_the_host(self):
-        self._login_fails_on_clab01(RuntimeError("secret text"))
+        self.login_errors["clab01"] = RuntimeError("secret text")
         outcomes = self._run_sync()
-        unexpected = [
-            (lab, SyncKind.FAILED, self._line(SYNC_ERROR_LINE, lab, error_type="RuntimeError"))
-            for lab in (self.lab_a, self.lab_b)
-        ]
+        unexpected = [self._unexpected(lab, "RuntimeError") for lab in (self.lab_a, self.lab_b)]
         self.assertEqual(self._summary(outcomes), [*unexpected, *self._synced(self.lab_a_clab02)])
         self.assertEqual(self._calls("clab01"), [mock.call.login(), mock.call.close()])
 
@@ -263,7 +253,6 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         for name, flags in (("timed out", {"timed_out": True}), ("unreachable", {"unreachable": True})):
             with self.subTest(name):
                 self._seed_old_values()
-                self.events.clear()
                 self.answers[("clab01", "lab-a")] = ClabApiError(f"Host clab01: {name}.", **flags)
                 outcomes = self._run_sync()
                 skipped = (self.lab_b, SyncKind.FAILED, self._line(SYNC_HOST_SKIPPED_MESSAGE, self.lab_b))
@@ -331,8 +320,10 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
 
         with mock.patch(WRITE_TARGET, side_effect=write_breaks_on_lab_a):
             outcomes = self._run_sync()
-        unexpected = (self.lab_a, SyncKind.FAILED, self._line(SYNC_ERROR_LINE, self.lab_a, error_type="DatabaseError"))
-        self.assertEqual(self._summary(outcomes), [unexpected, *self._synced(self.lab_b, self.lab_a_clab02)])
+        self.assertEqual(
+            self._summary(outcomes),
+            [self._unexpected(self.lab_a, "DatabaseError"), *self._synced(self.lab_b, self.lab_a_clab02)],
+        )
 
     def test_missing_status_raises_before_a_call(self):
         Status.objects.get(name=LabStatusChoices.DESTROYED).content_types.remove(ContentType.objects.get_for_model(Lab))
@@ -350,7 +341,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         second = self._run_sync()
         self.assertEqual(
             self._summary(second),
-            [(lab, SyncKind.UNCHANGED, "") for lab in (self.lab_a, self.lab_b, self.lab_a_clab02)],
+            self._synced(self.lab_a, self.lab_b, self.lab_a_clab02, kind=SyncKind.UNCHANGED),
         )
         self.assertEqual([outcome.result.saved for outcome in second], [False, False, False])
         self.assertEqual({lab.pk: (lab.last_updated, lab.last_inspect) for lab in Lab.objects.all()}, stored)
@@ -359,8 +350,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
         self.assertEqual(
             self._summary(third),
             [
-                (self.lab_a, SyncKind.UNCHANGED, ""),
-                (self.lab_b, SyncKind.UNCHANGED, ""),
+                *self._synced(self.lab_a, self.lab_b, kind=SyncKind.UNCHANGED),
                 *self._synced(self.lab_a_clab02),
             ],
         )
