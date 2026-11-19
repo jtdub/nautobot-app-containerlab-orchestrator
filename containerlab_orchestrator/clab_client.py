@@ -45,15 +45,17 @@ class ClabApiError(Exception):
         status_code: The HTTP status, or None when no response came.
         server_message: The JSON `error` text of the server, or None.
         timed_out: True when the server got the request but sent no response in time.
+        unreachable: True when the job cannot reach the server.
     """
 
-    def __init__(self, message, status_code=None, server_message=None, timed_out=False):
+    def __init__(self, message, status_code=None, server_message=None, timed_out=False, unreachable=False):
         """Keep the message and the details of the failure."""
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.server_message = server_message
         self.timed_out = timed_out
+        self.unreachable = unreachable
 
 
 class ClabApiClient:
@@ -194,7 +196,9 @@ class ClabApiClient:
                 "The lab state is unknown.",
                 timed_out=True,
             )
-        raise ClabApiError(f"Host {self.host}: cannot reach {self.base_url}: {type(failure).__name__}.")
+        raise ClabApiError(
+            f"Host {self.host}: cannot reach {self.base_url}: {type(failure).__name__}.", unreachable=True
+        )
 
     def _request(self, method, path, read_timeout=None, **kwargs):
         """Send an authenticated request and return the parsed JSON.
