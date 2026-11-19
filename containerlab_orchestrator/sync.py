@@ -36,8 +36,8 @@ SYNC_CHANGED_WARNING = (
 )
 """The skip warning of a lab whose status or host changed after the job read the list."""
 
-SYNC_DELETED_WARNING = "Lab {lab} on host {host} was deleted after the job started, so the job did not sync it."
-"""The skip warning of a lab that was deleted after the job read the list."""
+SYNC_DELETED_WARNING = "Lab {lab} on host {host}: the lab row is gone. The job did not sync the lab."
+"""The skip warning of a lab whose row is gone after the job read the list."""
 
 SYNC_TIME_LIMIT_MESSAGE = (
     "Lab {lab} on host {host}: the job time limit stopped the job before it logged a result for this lab. "

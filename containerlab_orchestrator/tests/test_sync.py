@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
+from django.utils import timezone
 from nautobot.apps.testing import TransactionTestCase
 from nautobot.core.utils.logging import sanitize
 from nautobot.extras.models import Status
@@ -15,7 +16,15 @@ from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
 from containerlab_orchestrator.deploy import NO_TOPOLOGY_MESSAGE, SERVER_TEXT_LIMIT, STATUS_MISSING_MESSAGE
-from containerlab_orchestrator.inspection import write_inspect
+from containerlab_orchestrator.destroy import NOT_OWNED_NOT_FOUND
+from containerlab_orchestrator.inspection import (
+    HELPERS_NOT_FOUND,
+    HELPERS_WARNING,
+    INSPECT_GUARD_MESSAGE,
+    INSPECT_NOT_OWNED_MESSAGE,
+    NOT_RUNNING_WARNING,
+    write_inspect,
+)
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.sync import (
     SYNC_CHANGED_WARNING,
@@ -107,7 +116,7 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
             answer = self.answers[(host.name, name)]
             if isinstance(answer, BaseException):
                 raise answer
-            return answer
+            return answer() if callable(answer) else answer
 
         client.inspect.side_effect = inspect
         self.host_mocks[host.name] = client
@@ -241,6 +250,46 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
             (after.status, after.last_inspect, after.last_updated), (before.status, OLD_INSPECT, before.last_updated)
         )
 
+    def test_foreign_result_fails_one_lab_only(self):
+        listed = self.answers[("clab01", "lab-a")]
+        foreign = [{**listed[0], "owner": "someone-else"}, *listed[1:]]
+        not_owned = ClabApiError(
+            "Host clab01: GET /api/v1/labs/lab-a returned HTTP 404: not owned",
+            status_code=404,
+            server_message=NOT_OWNED_NOT_FOUND.format(lab="lab-a"),
+        )
+        error = INSPECT_NOT_OWNED_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
+        for name, answer in (("a container of another owner", foreign), ("a not-owned 404", not_owned)):
+            with self.subTest(name):
+                self._seed_old_values()
+                self.answers[("clab01", "lab-a")] = answer
+                before = Lab.objects.get(pk=self.lab_a.pk)
+                outcomes = self._run_sync()
+                self.assertEqual(
+                    self._summary(outcomes),
+                    [self._failed(self.lab_a, error), *self._synced(self.lab_b, self.lab_a_clab02)],
+                )
+                after = Lab.objects.get(pk=self.lab_a.pk)
+                self.assertEqual(
+                    (after.status, after.last_inspect, after.last_updated),
+                    (before.status, OLD_INSPECT, before.last_updated),
+                )
+
+    def test_lab_that_changed_between_read_and_write_fails(self):
+        listed = self.answers[("clab01", "lab-b")]
+
+        def change_lab_a_then_list():
+            Lab.objects.filter(pk=self.lab_a.pk).update(last_updated=timezone.now())
+            return listed
+
+        self.answers[("clab01", "lab-b")] = change_lab_a_then_list
+        outcomes = self._run_sync()
+        guard = INSPECT_GUARD_MESSAGE.format(lab=self.lab_a)
+        self.assertEqual(
+            self._summary(outcomes), [self._failed(self.lab_a, guard), *self._synced(self.lab_b, self.lab_a_clab02)]
+        )
+        self.assertEqual(Lab.objects.get(pk=self.lab_a.pk).last_inspect, OLD_INSPECT)
+
     def test_two_messages_are_one_line(self):
         with mock.patch(WRITE_TARGET, side_effect=ValidationError(["First.", "Second."])):
             outcomes = self._run_sync()
@@ -263,14 +312,23 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
                 self.assertEqual(
                     self._calls("clab01"), [mock.call.login(), mock.call.inspect("lab-a"), mock.call.close()]
                 )
-        with self.subTest("an HTTP 500 does not skip the host"):
-            self._seed_old_values()
-            self.answers[("clab01", "lab-a")] = ClabApiError(INSPECT_500, status_code=500)
-            outcomes = self._run_sync()
-            self.assertEqual(
-                self._summary(outcomes),
-                [self._failed(self.lab_a, INSPECT_500), *self._synced(self.lab_b, self.lab_a_clab02)],
-            )
+        for name, message, status_code in (
+            ("an HTTP 500 does not skip the host", INSPECT_500, 500),
+            ("an error with no status and no flag does not skip the host", "Host clab01: invalid lab name.", None),
+        ):
+            with self.subTest(name):
+                self._seed_old_values()
+                self.host_mocks.clear()
+                self.answers[("clab01", "lab-a")] = ClabApiError(message, status_code=status_code)
+                outcomes = self._run_sync()
+                self.assertEqual(
+                    self._summary(outcomes),
+                    [self._failed(self.lab_a, message), *self._synced(self.lab_b, self.lab_a_clab02)],
+                )
+                self.assertEqual(
+                    self._calls("clab01"),
+                    [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
+                )
 
     def test_lab_that_changed_after_the_list_is_skipped(self):
         changes = (
@@ -355,6 +413,18 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
             ],
         )
         self.assertEqual(self.lab_status(self.lab_a_clab02), LabStatusChoices.FAILED)
+        node_name = self.answers[("clab02", "lab-a")][0]["nodeName"]
+        self.assertEqual(third[2].result.warnings, [NOT_RUNNING_WARNING.format(lab=self.lab_a_clab02, nodes=node_name)])
+        self.assertEqual([outcome.result.warnings for outcome in third[:2]], [[], []])
+        self.answers[("clab02", "lab-a")] = ClabApiError(
+            "Host clab02: GET /api/v1/labs/lab-a returned HTTP 404: helpers only",
+            status_code=404,
+            server_message=HELPERS_NOT_FOUND.format(lab="lab-a"),
+        )
+        fourth = self._run_sync()
+        self.assertEqual(
+            fourth[2].result.warnings, [HELPERS_WARNING.format(host=self.lab_a_clab02.host, lab=self.lab_a_clab02)]
+        )
 
     def test_time_limit_closes_the_client_and_raises(self):
         with self.subTest("in the inspect call"):
