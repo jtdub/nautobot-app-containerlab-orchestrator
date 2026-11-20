@@ -87,7 +87,8 @@ def _read_lab_job_access(user, lab):
         return NO_ACCESS
     inspect_allowed = lab_access_message(lab, user, "inspect", owner_check=False) == ""
     changing_allowed = inspect_allowed and (user.is_superuser or lab.owner_id == user.pk)
-    return LabJobAccess(runnable, changing_allowed, inspect_allowed, busy=inspect_allowed and is_busy(lab))
+    shows_button = changing_allowed or (inspect_allowed and "InspectLab" in runnable)
+    return LabJobAccess(runnable, changing_allowed, inspect_allowed, busy=shows_button and is_busy(lab))
 
 
 def lab_job_access(context):

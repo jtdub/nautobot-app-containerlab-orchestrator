@@ -57,7 +57,7 @@ A button shows only when its job accepts the user. The page uses the same checks
 | The user has `containerlab_orchestrator.view_lab` and `containerlab_orchestrator.change_lab` on the lab. | All five |
 | The user is the owner of the lab, or a superuser. | Build, Deploy, Redeploy, and Destroy |
 
-A user who is not the owner sees only Inspect. A lab with no owner shows Build, Deploy, Redeploy, and Destroy only to a
+A user who is not the owner and not a superuser sees only Inspect. A lab with no owner shows Build, Deploy, Redeploy, and Destroy only to a
 superuser. The buttons do not need `extras.view_job`.
 
 #### When a button is disabled
@@ -87,11 +87,14 @@ not check it. A queued job does not make the lab busy until a worker starts it.
 
 When two lab jobs of a lab run at the same time, the result depends on the job that writes first:
 
-- A second Destroy Lab calls the host, then fails with `Lab <lab> changed its status while the job ran, so the job did
-  not set Destroyed. ...`.
-- A Build Lab Topology during a Deploy Lab succeeds. The Deploy Lab ends with the warning `Lab <lab> got a new build
-  during the deploy. ...`. Then redeploy the lab.
-- Each other pair fails at the check of one job, with a message. See "Inspect during another job".
+- A second Destroy Lab calls the host. If the first Destroy Lab writes first, the second fails with `Lab <lab> changed
+  its status while the job ran, so the job did not set Destroyed. ...`.
+- A Build Lab Topology during a Deploy Lab of a Built or Failed lab succeeds. The Deploy Lab ends with the warning
+  `Lab <lab> got a new build during the deploy. ...`. Then redeploy the lab.
+- For a Destroyed lab, the build sets Built. Then the Deploy Lab fails with `Lab <lab> changed its status while the job
+  ran, so the job did not set Deployed. ...`.
+- In each other pair, one job can fail at its check with a message, or both jobs can succeed. See "Inspect during
+  another job".
 
 #### A stale result
 

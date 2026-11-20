@@ -385,6 +385,11 @@ class LabJobButtonBusyTestCase(LabJobButtonSetupTestCase):
                 self.assertEqual(self.shown_labels(self.get_body()), [])
                 busy.assert_not_called()
                 self.add_permissions(permission)
+        create_lab_job_result({"lab": str(self.lab_b.pk)})
+        Job.objects.filter(module_name=LAB_JOB_MODULE, job_class_name="InspectLab").update(enabled=False)
+        with self.subTest("not the owner, and Inspect Lab turned off"), mock.patch.object(views, "is_busy") as busy:
+            self.assertEqual(self.shown_labels(self.get_body(self.lab_b)), [])
+            busy.assert_not_called()
 
         self.make_superuser()
         lab_a = Lab.objects.get(pk=self.lab_a.pk)
