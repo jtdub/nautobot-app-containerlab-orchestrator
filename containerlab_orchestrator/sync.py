@@ -147,17 +147,28 @@ def _read_lab(client, lab):
         The outcome of a skip or a failure, else None and the current lab with its InspectRead. The last value is
         True only for a failure whose call got no response.
     """
-    current = Lab.objects.select_related("status", "host").filter(pk=lab.pk).first()
-    if current is None:
-        return _outcome(lab, SyncKind.SKIPPED, SYNC_DELETED_WARNING), None, False
-    if current.status.name not in SYNC_STATUSES or current.host_id != lab.host_id:
-        return _outcome(lab, SyncKind.SKIPPED, SYNC_CHANGED_WARNING), None, False
-    if _is_busy(current):
-        return _outcome(lab, SyncKind.SKIPPED, SYNC_BUSY_WARNING), None, False
+    checked, error = _guarded(_check_lab, lab)
+    if error:
+        return _error_outcome(lab, error), None, False
+    current, skip = checked
+    if skip:
+        return skip, None, False
     read, error = _guarded(_read_containers, client, current)
     if error:
         return _error_outcome(current, error), None, _no_response(error)
     return None, (current, read), False
+
+
+def _check_lab(lab):
+    """Read the lab row again, and return it with the skip outcome of the lab, or with None if the lab can sync."""
+    current = Lab.objects.select_related("status", "host").filter(pk=lab.pk).first()
+    if current is None:
+        return None, _outcome(lab, SyncKind.SKIPPED, SYNC_DELETED_WARNING)
+    if current.status.name not in SYNC_STATUSES or current.host_id != lab.host_id:
+        return current, _outcome(lab, SyncKind.SKIPPED, SYNC_CHANGED_WARNING)
+    if _is_busy(current):
+        return current, _outcome(lab, SyncKind.SKIPPED, SYNC_BUSY_WARNING)
+    return current, None
 
 
 def _host_all_gone(reads):

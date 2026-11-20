@@ -8,7 +8,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError
+from django.db import DatabaseError, OperationalError
 from django.utils import timezone
 from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TransactionTestCase, create_job_result_and_run_job
@@ -59,6 +59,7 @@ CLIENT_TARGET = "containerlab_orchestrator.sync.ClabApiClient"
 INSPECT_CLIENT_TARGET = "containerlab_orchestrator.inspection.ClabApiClient"
 JOB_MODULE = "containerlab_orchestrator.jobs"
 WRITE_TARGET = "containerlab_orchestrator.sync.write_inspect"
+BUSY_TARGET = "containerlab_orchestrator.sync._is_busy"
 LOGIN_ERROR = "Host clab01: login returned no token."
 INSPECT_500 = "Host clab01: GET /api/v1/labs/lab-a returned HTTP 500: inspect failed"
 
@@ -489,6 +490,43 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
             self._summary(outcomes),
             [self._unexpected(self.lab_a, "DatabaseError"), *self._synced(self.lab_b, self.lab_a_clab02)],
         )
+        for name, patcher in (
+            ("in the busy check", mock.patch(BUSY_TARGET, side_effect=self._busy_check_breaks_on_lab_a)),
+            (
+                "in the row read",
+                mock.patch.object(Lab.objects, "select_related", side_effect=self._read_breaks_on_lab_a),
+            ),
+        ):
+            with self.subTest(name):
+                self._seed_old_values()
+                self.host_mocks.clear()
+                labs = sync_targets(self.sync_admin)
+                with patcher:
+                    outcomes = self._run_sync(labs)
+                self.assertEqual(
+                    self._summary(outcomes),
+                    [self._unexpected(self.lab_a, "OperationalError"), *self._synced(self.lab_b, self.lab_a_clab02)],
+                )
+                self.assertEqual(
+                    self._calls("clab01"), [mock.call.login(), mock.call.inspect("lab-b"), mock.call.close()]
+                )
+
+    def _busy_check_breaks_on_lab_a(self, lab):
+        """Raise a statement timeout for lab-a of clab01, and return False for each other lab."""
+        if lab.pk == self.lab_a.pk:
+            raise OperationalError("canceling statement due to statement timeout")
+        return False
+
+    def _read_breaks_on_lab_a(self, *fields):
+        """Return the lab rows with the related fields, but raise a statement timeout for lab-a of clab01."""
+        rows = Lab.objects.all().select_related(*fields)
+
+        def filter_rows(**lookups):
+            if lookups.get("pk") == self.lab_a.pk:
+                raise OperationalError("canceling statement due to statement timeout")
+            return rows.filter(**lookups)
+
+        return mock.Mock(filter=filter_rows)
 
     def test_missing_status_raises_before_a_call(self):
         Status.objects.get(name=LabStatusChoices.DESTROYED).content_types.remove(ContentType.objects.get_for_model(Lab))
@@ -552,6 +590,15 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
                 self._calls("clab01"),
                 [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
             )
+            self.assertNotIn("clab02", self.host_mocks)
+        with self.subTest("in the busy check"):
+            self.host_mocks.clear()
+            with (
+                mock.patch(BUSY_TARGET, side_effect=SoftTimeLimitExceeded()),
+                self.assertRaises(SoftTimeLimitExceeded),
+            ):
+                self._run_sync()
+            self.assertEqual(self._calls("clab01"), [mock.call.login(), mock.call.close()])
             self.assertNotIn("clab02", self.host_mocks)
 
     def test_new_messages_are_not_sanitized(self):
