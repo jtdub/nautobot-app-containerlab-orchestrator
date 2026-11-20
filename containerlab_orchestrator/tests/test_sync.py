@@ -40,7 +40,7 @@ from containerlab_orchestrator.sync import (
     SYNC_HOST_SKIPPED_MESSAGE,
     SYNC_TIME_LIMIT_MESSAGE,
     SyncKind,
-    _is_busy,
+    is_busy,
     _job_lab,
     sync_labs,
     sync_targets,
@@ -48,6 +48,7 @@ from containerlab_orchestrator.sync import (
 from containerlab_orchestrator.tests.fixtures import (
     create_containerlab_hosts,
     create_lab_devices,
+    create_lab_job_result,
     create_lab_statuses,
     create_labs,
     grant_permission,
@@ -59,7 +60,7 @@ CLIENT_TARGET = "containerlab_orchestrator.sync.ClabApiClient"
 INSPECT_CLIENT_TARGET = "containerlab_orchestrator.inspection.ClabApiClient"
 JOB_MODULE = "containerlab_orchestrator.jobs"
 WRITE_TARGET = "containerlab_orchestrator.sync.write_inspect"
-BUSY_TARGET = "containerlab_orchestrator.sync._is_busy"
+BUSY_TARGET = "containerlab_orchestrator.sync.is_busy"
 LOGIN_ERROR = "Host clab01: login returned no token."
 INSPECT_500 = "Host clab01: GET /api/v1/labs/lab-a returned HTTP 500: inspect failed"
 
@@ -169,20 +170,6 @@ class SyncClientsMixin(SyncLabsSetupMixin):
     def _unexpected(self, lab, error_type):
         """Return the summary of a lab that failed with an unexpected error of the type."""
         return (lab, SyncKind.FAILED, self._line(SYNC_ERROR_LINE, lab, error_type=error_type))
-
-    @staticmethod
-    def _lab_job_result(task_kwargs, age=None, **fields):
-        """Save a result of the Inspect Lab job with the kwargs, STARTED and new unless the arguments say other."""
-        values = {
-            "job_model": Job.objects.get(module_name=JOB_MODULE, job_class_name="InspectLab"),
-            "name": "Inspect Lab",
-            "status": JobResultStatusChoices.STATUS_STARTED,
-            **fields,
-        }
-        result = JobResult.objects.create(task_kwargs=task_kwargs, **values)
-        if age is not None:
-            JobResult.objects.filter(pk=result.pk).update(date_created=timezone.now() - age)
-        return result
 
     def _busy(self, lab):
         """Return the summary of a lab that the sync skipped because a lab job of the lab runs."""
@@ -393,7 +380,7 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         for name, task_kwargs, fields in cases:
             with self.subTest(name):
                 self._reset()
-                self._lab_job_result(task_kwargs, **fields)
+                create_lab_job_result(task_kwargs, **fields)
                 outcomes = self._run_sync()
                 self.assertEqual(
                     self._summary(outcomes), [self._busy(self.lab_a), *self._synced(self.lab_b, self.lab_a_clab02)]
@@ -410,8 +397,8 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
             )
         JobResult.objects.filter(pk=job_result.pk).update(status=JobResultStatusChoices.STATUS_STARTED)
         self.assertEqual(JobResult.objects.get(pk=job_result.pk).task_kwargs, {"lab": str(self.lab_a.pk)})
-        self.assertTrue(_is_busy(self.lab_a))
-        self.assertFalse(_is_busy(self.lab_b))
+        self.assertTrue(is_busy(self.lab_a))
+        self.assertFalse(is_busy(self.lab_b))
         lab_id = str(self.lab_a.pk)
         self.assertEqual([_job_lab({"lab": self.lab_a.pk}), _job_lab({"lab": {"id": self.lab_a.pk}})], [lab_id, lab_id])
 
@@ -430,7 +417,7 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         for name, task_kwargs, fields in cases:
             with self.subTest(name):
                 self._reset()
-                self._lab_job_result(task_kwargs, **fields)
+                create_lab_job_result(task_kwargs, **fields)
                 outcomes = self._run_sync()
                 self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
                 self.assertEqual(
@@ -704,7 +691,7 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
     def test_host_breaker_counts_only_read_labs(self):
         with self.subTest("a busy lab and a gone lab"):
             self._reset()
-            self._lab_job_result({"lab": str(self.lab_a.pk)})
+            create_lab_job_result({"lab": str(self.lab_a.pk)})
             self._gone(self.lab_b)
             outcomes = self._run_sync()
             self.assertEqual(
@@ -730,7 +717,7 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
             lab_c = Lab.objects.get(pk=self.lab_a_clab02.pk)
             build_lab(lab_c)
             self.set_status(lab_c, LabStatusChoices.DEPLOYED)
-            self._lab_job_result({"lab": str(self.lab_a.pk)})
+            create_lab_job_result({"lab": str(self.lab_a.pk)})
             self._gone(self.lab_b, lab_c)
             outcomes = self._run_sync()
             self.assertEqual(

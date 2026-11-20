@@ -166,7 +166,7 @@ def _check_lab(lab):
         return None, _outcome(lab, SyncKind.SKIPPED, SYNC_DELETED_WARNING)
     if current.status.name not in SYNC_STATUSES or current.host_id != lab.host_id:
         return current, _outcome(lab, SyncKind.SKIPPED, SYNC_CHANGED_WARNING)
-    if _is_busy(current):
+    if is_busy(current):
         return current, _outcome(lab, SyncKind.SKIPPED, SYNC_BUSY_WARNING)
     return current, None
 
@@ -176,7 +176,7 @@ def _host_all_gone(reads):
     return len(reads) >= 2 and all(read.found is Found.NONE_LEFT for _, read in reads)
 
 
-def _is_busy(lab):
+def is_busy(lab):
     """Return True if a lab job of the lab has a result that is not ready and is newer than BUSY_RESULT_AGE."""
     task_kwargs = JobResult.objects.filter(
         job_model__module_name=LAB_JOBS_MODULE,
