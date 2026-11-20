@@ -7,6 +7,7 @@ import requests
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.db import OperationalError
 from nautobot.apps.choices import JobResultStatusChoices, LogLevelChoices, SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import TransactionTestCase, create_job_result_and_run_job
 from nautobot.extras.models import Job, ObjectChange, Status
@@ -21,6 +22,7 @@ from containerlab_orchestrator.sync import (
     SYNC_BUSY_WARNING,
     SYNC_CHANGED_WARNING,
     SYNC_DELETED_WARNING,
+    SYNC_ERROR_LINE,
     SYNC_FAILED_LINE,
     SYNC_HOST_ALL_GONE_MESSAGE,
     SYNC_HOST_SKIPPED_MESSAGE,
@@ -194,6 +196,13 @@ class SyncLabsJobTestCase(SyncClientsMixin, TransactionTestCase):
             ]
             self.assert_sync(job_result, lines, {"changed": 1, "failed": 2}, JobResultStatusChoices.STATUS_FAILURE)
             self.assertEqual(self.lab_status(self.lab_a), LabStatusChoices.DEPLOYED)
+        with self.subTest("an unexpected error fails one lab only"):
+            self._reset()
+            self.answers[("clab01", "lab-b")] = OperationalError("canceling statement due to lock timeout")
+            job_result = self.run_sync()
+            error = self.failed(self.lab_b, SYNC_ERROR_LINE, error_type="OperationalError")
+            lines = [error, self.synced(self.lab_a), self.synced(self.lab_a_clab02)]
+            self.assert_sync(job_result, lines, {"changed": 2, "failed": 1}, JobResultStatusChoices.STATUS_FAILURE)
 
     def test_no_lab_in_scope_ends_completed(self):
         Lab.objects.update(status=Status.objects.get(name=LabStatusChoices.BUILT))

@@ -685,16 +685,17 @@ Turn on "Sync Labs" as "Turn on the job" of Inspect Lab shows. Give the user of 
 #### Schedule the job
 
 1. Open Jobs > Jobs > Sync Labs, and click Run.
-2. Select "Recurring hourly", "Recurring daily", or "Recurring custom" with a crontab such as `0 */2 * * *`.
+2. Select "Recurring daily", or "Recurring custom" with a crontab such as `0 */2 * * *`.
 3. Make the interval longer than the hard time limit of the job.
 
 The job runs as the user who makes the schedule. If your site has an approval workflow, the schedule waits for
 approval. The job is a singleton. A second run that starts while a run continues ends Failed with
 `Job 'Sync Labs' is a singleton and already running.`, and changes nothing. Do not select "Ignore singleton lock".
 
-If somebody deletes the user of the schedule, Nautobot writes one Failed result at the next run time, with the text
-"Use 'Assume Ownership' on the scheduled job detail view to reassign it.". Nautobot also turns off the schedule, and
-sets its state to Errored. Use "Assume Ownership" on the scheduled job, then turn on the schedule again.
+If somebody deletes the user of the schedule, Nautobot turns off the schedule and sets its state to Errored. Nautobot
+3.2.9 also writes one Failed result with the text "Use 'Assume Ownership' on the scheduled job detail view to reassign
+it.". Use "Assume Ownership" on the scheduled job, then turn on the schedule again. Nautobot 3.1 writes no result and
+has no "Assume Ownership". Delete the schedule, and make it again as another user.
 
 #### Which labs the job reads
 
@@ -728,8 +729,7 @@ A lab job can still start after the check. Then one of the two jobs fails, as "I
 A login error fails each lab of that host. When a call to a host gets no response, each later lab of that host gets
 `Lab <lab> on host <host>: the host gave no response to an earlier call of this job, so the job did not sync the
 lab.` An unexpected error, such as a database lock timeout, gives `Lab <lab> on host <host>: the job got an unexpected
-error (<error type>). The job continued with the next lab.` In each case, the job continues with the other labs and
-hosts, and the run ends Failed.
+error (<error type>). The job continued with the next lab.` The other hosts continue, and the run ends Failed.
 
 #### The job log of a sync
 
@@ -742,8 +742,7 @@ A lab with an error gets `Lab <lab> on host <host>: <error>`. The job ends with
 `Sync Labs read <labs> labs: <changed> changed, <unchanged> did not change, <skipped> skipped, <failed> failed.` The
 job result holds only these counts. The rules of "The job log of an inspect" also apply.
 
-To see when the job last read a lab, open Jobs > Job Results, and filter by the job "Sync Labs". The lab page does
-not show the last sync, because the last update time of a lab with no change stays the same.
+To see the last sync of a lab, open Jobs > Job Results, and filter by the job "Sync Labs". The lab page does not.
 
 #### Time limits
 
