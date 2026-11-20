@@ -629,6 +629,8 @@ first, the other job can fail with `Lab <lab> changed its status while the job r
 first, Inspect Lab fails with `Lab <lab> changed while the job ran, so the job wrote nothing. Run the job again.`.
 A build or an edit of the lab during the job gives the same failure. Then run Inspect Lab again.
 
+Sync Labs skips a lab while another lab job of that lab runs. See "Sync all labs".
+
 #### Rename or move a lab
 
 Inspect Lab stops for a renamed lab, as Deploy Lab does. Run Build Lab Topology again first.
@@ -658,6 +660,100 @@ limit to 100 seconds more. Change the limits on the edit page of the job.
 If the login token ends during the inspect call, the job logs in again and sends the call again. Then the job makes
 four calls, up to 1240 seconds, and the soft time limit can stop it. The job then fails with
 `Lab <lab>: the job time limit stopped the inspect. The lab did not change.` Run the job again.
+
+### Sync all labs
+
+The Sync Labs job inspects each lab in scope, with the rules of Inspect Lab. Schedule it, and each lab page then
+shows the current node state and status. The job changes nothing on the host. After the production check of Inspect
+Lab, run Sync Labs one time by hand, and make sure that each lab in scope has a result line.
+
+#### Turn on the job
+
+Turn on "Sync Labs" as "Turn on the job" of Inspect Lab shows. Give the user of the schedule these permissions:
+
+| Permission | Reason |
+|---|---|
+| `extras.view_job` | The user finds the job under Jobs > Jobs. |
+| `extras.run_job` | The user runs the job, and makes a schedule of it. |
+| `extras.view_scheduledjob` | The user sees the schedule under Jobs > Scheduled Jobs. |
+| `extras.view_jobresult` | The user opens the job result. |
+| `extras.view_joblogentry` | The user reads the job log, with the warnings and the errors. |
+| `containerlab_orchestrator.view_lab` | The job reads only the labs that the user can view. |
+| `containerlab_orchestrator.change_lab` | The job writes only the labs that the user can change. |
+| `containerlab_orchestrator.view_labnode` | The user sees the node state on the lab page. |
+
+#### Schedule the job
+
+1. Open Jobs > Jobs > Sync Labs, and click Run.
+2. Select "Recurring daily", or "Recurring custom" with a crontab such as `0 */2 * * *`.
+3. Make the interval longer than the hard time limit of the job.
+
+The job runs as the user who makes the schedule. If your site has an approval workflow, the schedule waits for
+approval. The job is a singleton. A second run that starts while a run continues ends Failed with
+`Job 'Sync Labs' is a singleton and already running.`, and changes nothing. Do not select "Ignore singleton lock".
+
+If somebody deletes the user of the schedule, Nautobot turns off the schedule and sets its state to Errored. Nautobot
+3.2.9 also writes one Failed result with the text "Use 'Assume Ownership' on the scheduled job detail view to reassign
+it.". Use "Assume Ownership" on the scheduled job, then turn on the schedule again. Nautobot 3.1 writes no result and
+has no "Assume Ownership". Delete the schedule, and make it again as another user.
+
+#### Which labs the job reads
+
+The job reads each Deployed or Failed lab that the user can view and change, in the order of the host name, then the
+lab name. It reads the list one time, when it starts. Other labs get no log line and no call. A lab that the job sets
+to Destroyed leaves the scope. Run Inspect Lab for a Built or Destroyed lab.
+
+For each host, the job logs in one time, reads each lab, then writes each lab that it read. When the job reads 2 or
+more labs of a host, and the host reports no lab for each one, the job changes none of them. Each lab then gets
+`Lab <lab> on host <host>: the host reported no lab for each of its <count> labs, so the job did not change them.
+Check the host, then run Inspect Lab.` The count is only the labs that the job read, not the skipped or failed labs.
+When the job reads one lab only, it sets that lab to Destroyed. Destroy a lab before you change its host.
+
+#### What a sync changes
+
+The "Deployed or Failed lab" column of the table in "What an inspect changes" applies. The job does not save a lab
+with no change. A change in the order of the containers or in the uptime text of a container is no change. A lab
+with no change gets no change log entry, its last update time stays the same, and `last_inspect` keeps the older
+uptime text. Inspect Lab saves the lab on each run.
+
+#### Labs with a lab job that runs
+
+Just before it reads a lab, the job checks for a Build Lab Topology, Deploy Lab, Redeploy Lab, Destroy Lab, or Inspect
+Lab job of that lab that is not done. If Nautobot queued that job in the last 6 hours, Sync Labs skips the lab with
+the warning `Lab <lab> on host <host> has a lab job that runs, so the job did not sync the lab. Run Inspect Lab after
+that job ends.` A skip alone does not make the run Failed. Keep the hard time limit of each lab job less than 6 hours.
+A lab job can still start after the check. Then one of the two jobs fails, as "Inspect during another job" shows.
+
+#### Hosts that fail
+
+A login error fails each lab of that host. When a call to a host gets no response, each later lab of that host gets
+`Lab <lab> on host <host>: the host gave no response to an earlier call of this job, so the job did not sync the
+lab.` An unexpected error, such as a database lock timeout, gives `Lab <lab> on host <host>: the job got an unexpected
+error (<error type>). The job continued with the next lab.` The other hosts continue, and the run ends Failed.
+
+#### The job log of a sync
+
+The job logs one result line for each lab in scope. A lab that synced gets its inspect warnings, then one of these:
+
+- `Synced lab <lab> on host <host>: <nodes> nodes, <running> running, <warnings> warnings. Status: <status>.`
+- `Lab <lab> on host <host> did not change: <nodes> nodes, <running> running, <warnings> warnings. Status: <status>.`
+
+A lab with an error gets `Lab <lab> on host <host>: <error>`. The job ends with
+`Sync Labs read <labs> labs: <changed> changed, <unchanged> did not change, <skipped> skipped, <failed> failed.` The
+job result holds only these counts. The rules of "The job log of an inspect" also apply.
+
+To see the last sync of a lab, open Jobs > Job Results, and filter by the job "Sync Labs". The lab page does not.
+
+#### Time limits
+
+The job has a soft time limit of 3500 seconds and a hard time limit of 3600 seconds. The job makes one login for each
+host, and one inspect for each lab. A 401 adds one login and one retry. So the worst case is (labs + hosts) x (10 +
+`request_timeout`) seconds, plus 2 calls for each 401. With the default `request_timeout` of 300 seconds, 3500 covers
+10 slow calls. A host that gives no response uses about one wait, because the job skips its other labs.
+
+Set the soft time limit to the worst case + 100, and the hard time limit to 100 seconds more. Change the limits on
+the edit page of the job. If the soft time limit stops the job, each lab with no result line gets `Lab <lab> on host
+<host>: the job time limit stopped the job before it logged a result for this lab. Run Inspect Lab to check the lab.`
 
 ### Startup configs
 
