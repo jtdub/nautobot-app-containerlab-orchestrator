@@ -330,7 +330,8 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
 
     def test_confirmation_script_escapes_the_text_and_listens_only_on_a_link(self):
         script = render_to_string(
-            views.LAB_JOB_CONFIRM_SCRIPT, {"component": lab_job_button("Destroy"), "confirm_text": 'Say "yes" </script>'}
+            views.LAB_JOB_CONFIRM_SCRIPT,
+            {"component": lab_job_button("Destroy"), "confirm_text": 'Say "yes" </script>'},
         )
 
         self.assertIn(r'window.confirm("Say \u0022yes\u0022 \u003C/script\u003E")', script)
