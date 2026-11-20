@@ -1,6 +1,8 @@
 """Tests for the sync service that inspects each lab in scope on its host."""
 
+from datetime import timedelta
 from unittest import TestCase, mock
+from uuid import uuid4
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
@@ -8,15 +10,17 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 from django.utils import timezone
-from nautobot.apps.testing import TransactionTestCase
+from nautobot.apps.choices import JobResultStatusChoices
+from nautobot.apps.testing import TransactionTestCase, create_job_result_and_run_job
 from nautobot.core.utils.logging import sanitize
-from nautobot.extras.models import Status
+from nautobot.extras.context_managers import web_request_context
+from nautobot.extras.models import Job, JobResult, ObjectChange, Status
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
 from containerlab_orchestrator.deploy import NO_TOPOLOGY_MESSAGE, SERVER_TEXT_LIMIT, STATUS_MISSING_MESSAGE
-from containerlab_orchestrator.destroy import NOT_OWNED_NOT_FOUND
+from containerlab_orchestrator.destroy import NOT_OWNED_NOT_FOUND, PLAIN_NOT_FOUND
 from containerlab_orchestrator.inspection import (
     HELPERS_NOT_FOUND,
     HELPERS_WARNING,
@@ -27,13 +31,16 @@ from containerlab_orchestrator.inspection import (
 )
 from containerlab_orchestrator.models import Lab, LabNode
 from containerlab_orchestrator.sync import (
+    SYNC_BUSY_WARNING,
     SYNC_CHANGED_WARNING,
     SYNC_DELETED_WARNING,
     SYNC_ERROR_LINE,
     SYNC_FAILED_LINE,
+    SYNC_HOST_ALL_GONE_MESSAGE,
     SYNC_HOST_SKIPPED_MESSAGE,
     SYNC_TIME_LIMIT_MESSAGE,
     SyncKind,
+    _is_busy,
     sync_labs,
     sync_targets,
 )
@@ -48,6 +55,8 @@ from containerlab_orchestrator.tests.test_deploy import OLD_INSPECT
 from containerlab_orchestrator.tests.test_inspection import HOST_USER
 
 CLIENT_TARGET = "containerlab_orchestrator.sync.ClabApiClient"
+INSPECT_CLIENT_TARGET = "containerlab_orchestrator.inspection.ClabApiClient"
+JOB_MODULE = "containerlab_orchestrator.jobs"
 WRITE_TARGET = "containerlab_orchestrator.sync.write_inspect"
 LOGIN_ERROR = "Host clab01: login returned no token."
 INSPECT_500 = "Host clab01: GET /api/v1/labs/lab-a returned HTTP 500: inspect failed"
@@ -78,8 +87,8 @@ class SyncLabsSetupMixin(TestCase):
         return Lab.objects.get(pk=lab.pk).status.name
 
 
-class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
-    """Test the lab list, the login, the two phases, and the outcome of each lab of a sync."""
+class SyncClientsMixin(SyncLabsSetupMixin):
+    """Add one mocked client for each host, the answers of each lab, and the helpers of the sync tests."""
 
     def setUp(self):
         """Seed old node values, and mock one client for each host whose containers run."""
@@ -157,6 +166,37 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
     def _unexpected(self, lab, error_type):
         """Return the summary of a lab that failed with an unexpected error of the type."""
         return (lab, SyncKind.FAILED, self._line(SYNC_ERROR_LINE, lab, error_type=error_type))
+
+    @staticmethod
+    def _lab_job_result(task_kwargs, age=None, **fields):
+        """Save a result of the Inspect Lab job with the kwargs, STARTED and new unless the arguments say other."""
+        values = {
+            "job_model": Job.objects.get(module_name=JOB_MODULE, job_class_name="InspectLab"),
+            "name": "Inspect Lab",
+            "status": JobResultStatusChoices.STATUS_STARTED,
+            **fields,
+        }
+        result = JobResult.objects.create(task_kwargs=task_kwargs, **values)
+        if age is not None:
+            JobResult.objects.filter(pk=result.pk).update(date_created=timezone.now() - age)
+        return result
+
+    def _busy(self, lab):
+        """Return the summary of a lab that the sync skipped because a lab job of the lab runs."""
+        return (lab, SyncKind.SKIPPED, self._line(SYNC_BUSY_WARNING, lab))
+
+    @staticmethod
+    def _plain_not_found(host_name, name):
+        """Return the client error of a host that reports no lab of the name."""
+        return ClabApiError(
+            f"Host {host_name}: GET /api/v1/labs/{name} returned HTTP 404: not found",
+            status_code=404,
+            server_message=PLAIN_NOT_FOUND.format(lab=name),
+        )
+
+
+class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
+    """Test the lab list, the login, the two phases, and the outcome of each lab of a sync."""
 
     def test_targets_are_deployed_or_failed_labs_the_user_can_change(self):
         with self.subTest("Built and Destroyed labs are out, a Failed lab is in"):
@@ -330,6 +370,64 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
                     [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
                 )
 
+    def test_busy_lab_is_skipped(self):
+        lab_id = str(self.lab_a.pk)
+        model_value = {"id": lab_id, "__nautobot_type__": "containerlab_orchestrator.models.Lab", "display": "lab-a"}
+        cases = (
+            ("a text", {"lab": lab_id}, {}),
+            ("a UUID", {"lab": self.lab_a.pk}, {}),
+            ("a model instance", {"lab": model_value}, {}),
+            ("a PENDING result", {"lab": lab_id}, {"status": JobResultStatusChoices.STATUS_PENDING}),
+            ("a result of 5 hours and 59 minutes", {"lab": lab_id}, {"age": timedelta(hours=5, minutes=59)}),
+        )
+        for name, task_kwargs, fields in cases:
+            with self.subTest(name):
+                self._seed_old_values()
+                JobResult.objects.all().delete()
+                self._lab_job_result(task_kwargs, **fields)
+                outcomes = self._run_sync()
+                self.assertEqual(
+                    self._summary(outcomes), [self._busy(self.lab_a), *self._synced(self.lab_b, self.lab_a_clab02)]
+                )
+                self.assertEqual(
+                    self._calls("clab01"), [mock.call.login(), mock.call.inspect("lab-b"), mock.call.close()]
+                )
+                self.assertEqual(Lab.objects.get(pk=self.lab_a.pk).last_inspect, OLD_INSPECT)
+
+    def test_real_lab_job_result_makes_the_lab_busy(self):
+        with mock.patch(INSPECT_CLIENT_TARGET, autospec=True):
+            job_result = create_job_result_and_run_job(
+                JOB_MODULE, "InspectLab", username="sync-admin", lab=self.lab_a.pk
+            )
+        JobResult.objects.filter(pk=job_result.pk).update(status=JobResultStatusChoices.STATUS_STARTED)
+        self.assertEqual(JobResult.objects.get(pk=job_result.pk).task_kwargs, {"lab": str(self.lab_a.pk)})
+        self.assertTrue(_is_busy(self.lab_a))
+        self.assertFalse(_is_busy(self.lab_b))
+
+    def test_results_that_do_not_make_a_lab_busy(self):
+        lab_id = str(self.lab_a.pk)
+        other_job = Job.objects.exclude(module_name=JOB_MODULE).first()
+        self.assertIsNotNone(other_job)
+        cases = (
+            ("older than 6 hours", {"lab": lab_id}, {"age": timedelta(hours=6, minutes=1)}),
+            ("status SUCCESS", {"lab": lab_id}, {"status": JobResultStatusChoices.STATUS_SUCCESS}),
+            ("another lab", {"lab": str(uuid4())}, {}),
+            ("a job of another module", {"lab": lab_id}, {"job_model": other_job}),
+            ("no lab input", {}, {}),
+            ("kwargs that are not a dict", [lab_id], {}),
+        )
+        for name, task_kwargs, fields in cases:
+            with self.subTest(name):
+                self._seed_old_values()
+                JobResult.objects.all().delete()
+                self._lab_job_result(task_kwargs, **fields)
+                outcomes = self._run_sync()
+                self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
+                self.assertEqual(
+                    self._calls("clab01"),
+                    [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
+                )
+
     def test_lab_that_changed_after_the_list_is_skipped(self):
         changes = (
             ("set Destroyed", SYNC_CHANGED_WARNING, lambda: self.set_status(self.lab_a, LabStatusChoices.DESTROYED)),
@@ -456,7 +554,149 @@ class SyncServiceTestCase(SyncLabsSetupMixin, TransactionTestCase):
             self._line(SYNC_CHANGED_WARNING, lab),
             self._line(SYNC_DELETED_WARNING, lab),
             self._line(SYNC_TIME_LIMIT_MESSAGE, lab),
+            self._line(SYNC_BUSY_WARNING, lab),
+            self._line(SYNC_HOST_ALL_GONE_MESSAGE, lab, count=2),
         )
         for text in texts:
             with self.subTest(text=text):
                 self.assertEqual(sanitize(text), text)
+
+
+class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
+    """Test the host breaker, which writes no lab of a host that reports no lab for each lab that the job read."""
+
+    def setUp(self):
+        """Keep the container answers of each lab, so that each subTest can start from them."""
+        super().setUp()
+        self.listed = dict(self.answers)
+
+    def _reset(self):
+        """Set each lab Deployed with old values, give each lab its containers, and delete each job result."""
+        Lab.objects.update(status=Status.objects.get(name=LabStatusChoices.DEPLOYED))
+        self._seed_old_values()
+        self.answers.update(self.listed)
+        JobResult.objects.all().delete()
+
+    def _all_gone(self, lab, count):
+        """Return the summary of a lab that the breaker did not write."""
+        return (lab, SyncKind.FAILED, self._line(SYNC_HOST_ALL_GONE_MESSAGE, lab, count=count))
+
+    def _gone(self, *labs):
+        """Make the host of each lab report no lab of its name."""
+        for lab in labs:
+            self.answers[(lab.host.name, lab.name)] = self._plain_not_found(lab.host.name, lab.name)
+
+    @staticmethod
+    def _stored(*labs):
+        """Return the status, the stored result, the last update time, and the node rows of each lab row."""
+        return [
+            (
+                lab.status.name,
+                lab.last_inspect,
+                lab.last_updated,
+                list(
+                    lab.lab_nodes.order_by("node_name").values_list("node_name", "state", "container_id", "mgmt_ipv4")
+                ),
+            )
+            for lab in Lab.objects.filter(pk__in=[lab.pk for lab in labs]).order_by("name")
+        ]
+
+    @staticmethod
+    def _change_count(lab):
+        """Return the count of change log entries of the lab."""
+        return ObjectChange.objects.filter(changed_object_id=lab.pk).count()
+
+    def test_host_breaker_writes_nothing_when_each_lab_is_gone(self):
+        for name, lab_b_answer in (("two plain 404 answers", None), ("a plain 404 and an empty list", [])):
+            with self.subTest(name):
+                self._reset()
+                self._gone(self.lab_a, self.lab_b)
+                if lab_b_answer is not None:
+                    self.answers[("clab01", "lab-b")] = lab_b_answer
+                before = self._stored(self.lab_a, self.lab_b)
+                counts = [self._change_count(lab) for lab in (self.lab_a, self.lab_b, self.lab_a_clab02)]
+                with web_request_context(self.sync_admin):
+                    outcomes = self._run_sync()
+                self.assertEqual(
+                    self._summary(outcomes),
+                    [self._all_gone(self.lab_a, 2), self._all_gone(self.lab_b, 2), *self._synced(self.lab_a_clab02)],
+                )
+                self.assertEqual(self._stored(self.lab_a, self.lab_b), before)
+                self.assertEqual(before[0][0], LabStatusChoices.DEPLOYED)
+                self.assertEqual(
+                    [self._change_count(lab) for lab in (self.lab_a, self.lab_b, self.lab_a_clab02)],
+                    [counts[0], counts[1], counts[2] + 1],
+                )
+                self.assertEqual(
+                    self._calls("clab01"),
+                    [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
+                )
+
+    def test_host_breaker_needs_two_gone_labs(self):
+        with self.subTest("the one lab of a host is gone"):
+            self._reset()
+            self._gone(self.lab_a_clab02)
+            outcomes = self._run_sync()
+            self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
+            self.assertEqual(self.lab_status(self.lab_a_clab02), LabStatusChoices.DESTROYED)
+        with self.subTest("a gone lab and a listed lab"):
+            self._reset()
+            self._gone(self.lab_a)
+            outcomes = self._run_sync()
+            self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
+            self.assertEqual(
+                [self.lab_status(self.lab_a), self.lab_status(self.lab_b)],
+                [LabStatusChoices.DESTROYED, LabStatusChoices.DEPLOYED],
+            )
+        with self.subTest("a lab with helper containers and a gone lab"):
+            self._reset()
+            self._gone(self.lab_b)
+            self.answers[("clab01", "lab-a")] = ClabApiError(
+                "Host clab01: GET /api/v1/labs/lab-a returned HTTP 404: helpers only",
+                status_code=404,
+                server_message=HELPERS_NOT_FOUND.format(lab="lab-a"),
+            )
+            outcomes = self._run_sync()
+            self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
+            self.assertEqual(
+                [self.lab_status(self.lab_a), self.lab_status(self.lab_b)],
+                [LabStatusChoices.FAILED, LabStatusChoices.DESTROYED],
+            )
+
+    def test_host_breaker_counts_only_read_labs(self):
+        with self.subTest("a busy lab and a gone lab"):
+            self._reset()
+            self._lab_job_result({"lab": str(self.lab_a.pk)})
+            self._gone(self.lab_b)
+            outcomes = self._run_sync()
+            self.assertEqual(
+                self._summary(outcomes), [self._busy(self.lab_a), *self._synced(self.lab_b, self.lab_a_clab02)]
+            )
+            self.assertEqual(
+                [self.lab_status(self.lab_a), self.lab_status(self.lab_b)],
+                [LabStatusChoices.DEPLOYED, LabStatusChoices.DESTROYED],
+            )
+        with self.subTest("a failed lab and a gone lab"):
+            self._reset()
+            self.answers[("clab01", "lab-a")] = ClabApiError(INSPECT_500, status_code=500)
+            self._gone(self.lab_b)
+            outcomes = self._run_sync()
+            self.assertEqual(
+                self._summary(outcomes),
+                [self._failed(self.lab_a, INSPECT_500), *self._synced(self.lab_b, self.lab_a_clab02)],
+            )
+            self.assertEqual(self.lab_status(self.lab_b), LabStatusChoices.DESTROYED)
+        with self.subTest("a busy lab and two gone labs give a count of 2"):
+            self._reset()
+            Lab.objects.filter(pk=self.lab_a_clab02.pk).update(host=self.hosts[0], name="lab-c")
+            build_lab(Lab.objects.get(pk=self.lab_a_clab02.pk))
+            self.set_status(self.lab_a_clab02, LabStatusChoices.DEPLOYED)
+            lab_c = Lab.objects.get(pk=self.lab_a_clab02.pk)
+            self._lab_job_result({"lab": str(self.lab_a.pk)})
+            self._gone(self.lab_b, lab_c)
+            outcomes = self._run_sync()
+            self.assertEqual(
+                self._summary(outcomes),
+                [self._busy(self.lab_a), self._all_gone(self.lab_b, 2), self._all_gone(lab_c, 2)],
+            )
+            self.assertEqual(self.lab_status(lab_c), LabStatusChoices.DEPLOYED)
