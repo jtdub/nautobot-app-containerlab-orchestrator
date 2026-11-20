@@ -1,21 +1,31 @@
 """Inspect each Deployed or Failed lab in scope on its host, with one login for each host."""
 
 import enum
+from datetime import timedelta
 from itertools import groupby
 from operator import attrgetter
 from typing import NamedTuple
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+from nautobot.apps.choices import JobResultStatusChoices
+from nautobot.extras.models import JobResult
 
 from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
 from containerlab_orchestrator.deploy import error_text, stored_nodes
 from containerlab_orchestrator.destroy import DESTROY_STATUSES
-from containerlab_orchestrator.inspection import InspectResult, inspect_statuses, read_containers, write_inspect
+from containerlab_orchestrator.inspection import Found, InspectResult, inspect_statuses, read_containers, write_inspect
 from containerlab_orchestrator.models import Lab
 
 SYNC_STATUSES = DESTROY_STATUSES
 """The lab statuses that a sync inspects."""
+
+LAB_JOBS_MODULE = "containerlab_orchestrator.jobs"
+"""The module of the lab jobs whose results make a lab busy."""
+
+BUSY_RESULT_AGE = timedelta(hours=6)
+"""The age after which a result that is not ready no longer makes a lab busy."""
 
 SYNC_FAILED_LINE = "Lab {lab} on host {host}: {error}"
 """The failure line of a lab whose sync got an error."""
@@ -30,6 +40,18 @@ SYNC_HOST_SKIPPED_MESSAGE = (
     "the lab."
 )
 """The failure line of a lab after a call to its host that got no response."""
+
+SYNC_BUSY_WARNING = (
+    "Lab {lab} on host {host} has a lab job that runs, so the job did not sync the lab. "
+    "Run Inspect Lab after that job ends."
+)
+"""The skip warning of a lab that has a lab job that runs."""
+
+SYNC_HOST_ALL_GONE_MESSAGE = (
+    "Lab {lab} on host {host}: the host reported no lab for each of its {count} labs, so the job did not change "
+    "them. Check the host, then run Inspect Lab."
+)
+"""The failure line of each lab of a host that reported no lab for each lab that the job read."""
 
 SYNC_CHANGED_WARNING = (
     "Lab {lab} on host {host} changed after the job started, so the job did not sync the lab. Run Inspect Lab."
@@ -108,6 +130,10 @@ def _sync_host(labs, statuses):
                 yield outcome
             else:
                 reads.append(read)
+        if _host_all_gone(reads):
+            for current, _ in reads:
+                yield _outcome(current, SyncKind.FAILED, SYNC_HOST_ALL_GONE_MESSAGE, count=len(reads))
+            return
         for current, read in reads:
             yield _write_lab(current, statuses, read)
     finally:
@@ -121,15 +147,55 @@ def _read_lab(client, lab):
         The outcome of a skip or a failure, else None and the current lab with its InspectRead. The last value is
         True only for a failure whose call got no response.
     """
-    current = Lab.objects.select_related("status", "host").filter(pk=lab.pk).first()
-    if current is None:
-        return _outcome(lab, SyncKind.SKIPPED, SYNC_DELETED_WARNING), None, False
-    if current.status.name not in SYNC_STATUSES or current.host_id != lab.host_id:
-        return _outcome(lab, SyncKind.SKIPPED, SYNC_CHANGED_WARNING), None, False
+    checked, error = _guarded(_check_lab, lab)
+    if error:
+        return _error_outcome(lab, error), None, False
+    current, skip = checked
+    if skip:
+        return skip, None, False
     read, error = _guarded(_read_containers, client, current)
     if error:
         return _error_outcome(current, error), None, _no_response(error)
     return None, (current, read), False
+
+
+def _check_lab(lab):
+    """Read the lab row again, and return it with the skip outcome of the lab, or with None if the lab can sync."""
+    current = Lab.objects.select_related("status", "host").filter(pk=lab.pk).first()
+    if current is None:
+        return None, _outcome(lab, SyncKind.SKIPPED, SYNC_DELETED_WARNING)
+    if current.status.name not in SYNC_STATUSES or current.host_id != lab.host_id:
+        return current, _outcome(lab, SyncKind.SKIPPED, SYNC_CHANGED_WARNING)
+    if _is_busy(current):
+        return current, _outcome(lab, SyncKind.SKIPPED, SYNC_BUSY_WARNING)
+    return current, None
+
+
+def _host_all_gone(reads):
+    """Return True if the job read two labs or more of the host, and the host reported no lab for each one."""
+    return len(reads) >= 2 and all(read.found is Found.NONE_LEFT for _, read in reads)
+
+
+def _is_busy(lab):
+    """Return True if a lab job of the lab has a result that is not ready and is newer than BUSY_RESULT_AGE."""
+    task_kwargs = JobResult.objects.filter(
+        job_model__module_name=LAB_JOBS_MODULE,
+        status__in=JobResultStatusChoices.UNREADY_STATES,
+        date_created__gte=timezone.now() - BUSY_RESULT_AGE,
+    ).values_list("task_kwargs", flat=True)
+    lab_id = str(lab.pk)
+    return any(_job_lab(kwargs) == lab_id for kwargs in task_kwargs)
+
+
+def _job_lab(task_kwargs):
+    """Return the lab input of the job kwargs as text, or None.
+
+    The input can be a text, a UUID, or the dict form of a model instance with an `id` key.
+    """
+    value = task_kwargs.get("lab") if isinstance(task_kwargs, dict) else None
+    if isinstance(value, dict):
+        value = value.get("id")
+    return None if value is None else str(value)
 
 
 def _read_containers(client, lab):
