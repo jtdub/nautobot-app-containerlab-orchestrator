@@ -344,19 +344,19 @@ class LabJobButtonBusyTestCase(LabJobButtonSetupTestCase):
         self.assert_titles(self.get_body(), dict.fromkeys(ALL_LABELS, BUSY_TITLE))
 
     def test_results_that_do_not_disable_the_buttons(self):
-        lab_id = str(self.lab_a.pk)
         other_job = Job.objects.exclude(module_name=LAB_JOB_MODULE).first()
-        cases = (
-            ("older than 6 hours", {"lab": lab_id}, {"age": timedelta(hours=6, minutes=1)}),
-            ("status SUCCESS", {"lab": lab_id}, {"status": JobResultStatusChoices.STATUS_SUCCESS}),
-            ("another lab", {"lab": str(uuid4())}, {}),
-            ("a job of another module", {"lab": lab_id}, {"job_model": other_job}),
-            ("no lab input", {}, {}),
-        )
-        for name, task_kwargs, fields in cases:
+        self.assertIsNotNone(other_job)
+        changes_of_a_busy_result = {
+            "older than 6 hours": {"age": timedelta(hours=6, minutes=1)},
+            "status SUCCESS": {"status": JobResultStatusChoices.STATUS_SUCCESS},
+            "another lab": {"task_kwargs": {"lab": str(uuid4())}},
+            "a job of another module": {"job_model": other_job},
+            "no lab input": {"task_kwargs": {}},
+        }
+        for name, change in changes_of_a_busy_result.items():
             with self.subTest(name):
                 JobResult.objects.all().delete()
-                create_lab_job_result(task_kwargs, **fields)
+                create_lab_job_result(**{"task_kwargs": {"lab": str(self.lab_a.pk)}, **change})
                 self.assert_titles(self.get_body(), {})
 
     def test_stale_result_disables_until_six_hours(self):
