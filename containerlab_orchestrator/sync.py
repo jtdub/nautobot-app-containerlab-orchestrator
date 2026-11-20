@@ -172,7 +172,8 @@ def _is_busy(lab):
         status__in=JobResultStatusChoices.UNREADY_STATES,
         date_created__gte=timezone.now() - BUSY_RESULT_AGE,
     ).values_list("task_kwargs", flat=True)
-    return any(_job_lab(kwargs) == str(lab.pk) for kwargs in task_kwargs)
+    lab_id = str(lab.pk)
+    return any(_job_lab(kwargs) == lab_id for kwargs in task_kwargs)
 
 
 def _job_lab(task_kwargs):

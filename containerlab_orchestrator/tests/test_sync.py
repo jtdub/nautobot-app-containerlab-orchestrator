@@ -113,6 +113,7 @@ class SyncClientsMixin(SyncLabsSetupMixin):
         patcher = mock.patch(CLIENT_TARGET, autospec=True, side_effect=self._new_client)
         self.client_class = patcher.start()
         self.addCleanup(patcher.stop)
+        self.listed = dict(self.answers)
 
     def _new_client(self, host):
         """Return a new mocked client for the host, whose inspect gives the answer of the lab."""
@@ -186,13 +187,20 @@ class SyncClientsMixin(SyncLabsSetupMixin):
         return (lab, SyncKind.SKIPPED, self._line(SYNC_BUSY_WARNING, lab))
 
     @staticmethod
-    def _plain_not_found(host_name, name):
-        """Return the client error of a host that reports no lab of the name."""
+    def _not_found(host_name, name, template=PLAIN_NOT_FOUND):
+        """Return the client error of a host that gives a 404 with the server text of the template."""
         return ClabApiError(
             f"Host {host_name}: GET /api/v1/labs/{name} returned HTTP 404: not found",
             status_code=404,
-            server_message=PLAIN_NOT_FOUND.format(lab=name),
+            server_message=template.format(lab=name),
         )
+
+    def _reset(self):
+        """Set each lab Deployed with old values, give each lab its containers, and delete each job result."""
+        Lab.objects.update(status=Status.objects.get(name=LabStatusChoices.DEPLOYED))
+        self._seed_old_values()
+        self.answers.update(self.listed)
+        JobResult.objects.all().delete()
 
 
 class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
@@ -382,8 +390,7 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         )
         for name, task_kwargs, fields in cases:
             with self.subTest(name):
-                self._seed_old_values()
-                JobResult.objects.all().delete()
+                self._reset()
                 self._lab_job_result(task_kwargs, **fields)
                 outcomes = self._run_sync()
                 self.assertEqual(
@@ -418,8 +425,7 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         )
         for name, task_kwargs, fields in cases:
             with self.subTest(name):
-                self._seed_old_values()
-                JobResult.objects.all().delete()
+                self._reset()
                 self._lab_job_result(task_kwargs, **fields)
                 outcomes = self._run_sync()
                 self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
@@ -565,18 +571,6 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
 class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
     """Test the host breaker, which writes no lab of a host that reports no lab for each lab that the job read."""
 
-    def setUp(self):
-        """Keep the container answers of each lab, so that each subTest can start from them."""
-        super().setUp()
-        self.listed = dict(self.answers)
-
-    def _reset(self):
-        """Set each lab Deployed with old values, give each lab its containers, and delete each job result."""
-        Lab.objects.update(status=Status.objects.get(name=LabStatusChoices.DEPLOYED))
-        self._seed_old_values()
-        self.answers.update(self.listed)
-        JobResult.objects.all().delete()
-
     def _all_gone(self, lab, count):
         """Return the summary of a lab that the breaker did not write."""
         return (lab, SyncKind.FAILED, self._line(SYNC_HOST_ALL_GONE_MESSAGE, lab, count=count))
@@ -584,7 +578,7 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
     def _gone(self, *labs):
         """Make the host of each lab report no lab of its name."""
         for lab in labs:
-            self.answers[(lab.host.name, lab.name)] = self._plain_not_found(lab.host.name, lab.name)
+            self.answers[(lab.host.name, lab.name)] = self._not_found(lab.host.name, lab.name)
 
     @staticmethod
     def _stored(*labs):
@@ -602,19 +596,20 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
         ]
 
     @staticmethod
-    def _change_count(lab):
-        """Return the count of change log entries of the lab."""
-        return ObjectChange.objects.filter(changed_object_id=lab.pk).count()
+    def _change_counts(*labs):
+        """Return the count of change log entries of each lab."""
+        return [ObjectChange.objects.filter(changed_object_id=lab.pk).count() for lab in labs]
 
     def test_host_breaker_writes_nothing_when_each_lab_is_gone(self):
-        for name, lab_b_answer in (("two plain 404 answers", None), ("a plain 404 and an empty list", [])):
+        labs = (self.lab_a, self.lab_b, self.lab_a_clab02)
+        cases = (("two plain 404 answers", self._not_found("clab01", "lab-b")), ("a plain 404 and an empty list", []))
+        for name, lab_b_answer in cases:
             with self.subTest(name):
                 self._reset()
-                self._gone(self.lab_a, self.lab_b)
-                if lab_b_answer is not None:
-                    self.answers[("clab01", "lab-b")] = lab_b_answer
+                self._gone(self.lab_a)
+                self.answers[("clab01", "lab-b")] = lab_b_answer
                 before = self._stored(self.lab_a, self.lab_b)
-                counts = [self._change_count(lab) for lab in (self.lab_a, self.lab_b, self.lab_a_clab02)]
+                counts = self._change_counts(*labs)
                 with web_request_context(self.sync_admin):
                     outcomes = self._run_sync()
                 self.assertEqual(
@@ -623,10 +618,7 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
                 )
                 self.assertEqual(self._stored(self.lab_a, self.lab_b), before)
                 self.assertEqual(before[0][0], LabStatusChoices.DEPLOYED)
-                self.assertEqual(
-                    [self._change_count(lab) for lab in (self.lab_a, self.lab_b, self.lab_a_clab02)],
-                    [counts[0], counts[1], counts[2] + 1],
-                )
+                self.assertEqual(self._change_counts(*labs), [*counts[:2], counts[2] + 1])
                 self.assertEqual(
                     self._calls("clab01"),
                     [mock.call.login(), mock.call.inspect("lab-a"), mock.call.inspect("lab-b"), mock.call.close()],
@@ -651,11 +643,7 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
         with self.subTest("a lab with helper containers and a gone lab"):
             self._reset()
             self._gone(self.lab_b)
-            self.answers[("clab01", "lab-a")] = ClabApiError(
-                "Host clab01: GET /api/v1/labs/lab-a returned HTTP 404: helpers only",
-                status_code=404,
-                server_message=HELPERS_NOT_FOUND.format(lab="lab-a"),
-            )
+            self.answers[("clab01", "lab-a")] = self._not_found("clab01", "lab-a", HELPERS_NOT_FOUND)
             outcomes = self._run_sync()
             self.assertEqual(self._summary(outcomes), self._synced(self.lab_a, self.lab_b, self.lab_a_clab02))
             self.assertEqual(
@@ -689,9 +677,9 @@ class SyncBreakerTestCase(SyncClientsMixin, TransactionTestCase):
         with self.subTest("a busy lab and two gone labs give a count of 2"):
             self._reset()
             Lab.objects.filter(pk=self.lab_a_clab02.pk).update(host=self.hosts[0], name="lab-c")
-            build_lab(Lab.objects.get(pk=self.lab_a_clab02.pk))
-            self.set_status(self.lab_a_clab02, LabStatusChoices.DEPLOYED)
             lab_c = Lab.objects.get(pk=self.lab_a_clab02.pk)
+            build_lab(lab_c)
+            self.set_status(lab_c, LabStatusChoices.DEPLOYED)
             self._lab_job_result({"lab": str(self.lab_a.pk)})
             self._gone(self.lab_b, lab_c)
             outcomes = self._run_sync()
