@@ -1,5 +1,7 @@
 """Jobs of the containerlab_orchestrator app."""
 
+from collections import Counter
+
 from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
@@ -10,6 +12,7 @@ from containerlab_orchestrator.destroy import DESTROY_TIME_LIMIT_MESSAGE, Destro
 from containerlab_orchestrator.inspection import INSPECT_TIME_LIMIT_MESSAGE, inspect_lab
 from containerlab_orchestrator.models import Lab
 from containerlab_orchestrator.redeploy import HALF_DONE_MESSAGE, redeploy_lab
+from containerlab_orchestrator.sync import SYNC_TIME_LIMIT_MESSAGE, SyncKind, sync_labs, sync_targets
 
 name = "Containerlab Orchestrator"  # pylint: disable=invalid-name
 
@@ -50,6 +53,22 @@ INSPECT_SUMMARY = (
     "Inspected lab {lab} on host {host}: {nodes} nodes, {running} running, {warnings} warnings. Status: {status}."
 )
 """The success line of an inspect."""
+
+SYNC_CHANGED_SUMMARY = (
+    "Synced lab {lab} on host {host}: {nodes} nodes, {running} running, {warnings} warnings. Status: {status}."
+)
+"""The success line of a lab that the sync saved."""
+
+SYNC_UNCHANGED_SUMMARY = (
+    "Lab {lab} on host {host} did not change: {nodes} nodes, {running} running, {warnings} warnings. "
+    "Status: {status}."
+)
+"""The success line of a lab that the sync did not save, because nothing changed."""
+
+SYNC_SUMMARY = (
+    "Sync Labs read {labs} labs: {changed} changed, {unchanged} did not change, {skipped} skipped, {failed} failed."
+)
+"""The last line of a sync, with the count of the labs of each outcome."""
 
 
 def lab_access_message(lab, user, verb, owner_check=True):
@@ -336,5 +355,75 @@ class InspectLab(Job):
         return {"nodes": result.node_count, "running": result.running_count, "warnings": len(result.warnings)}
 
 
-jobs = [BuildLabTopology, DeployLab, RedeployLab, DestroyLab, InspectLab]
+class SyncLabs(Job):
+    """Inspect each Deployed or Failed lab that the job user can view and change, with one login for each host."""
+
+    class Meta:  # pylint: disable=too-few-public-methods
+        """Job metadata."""
+
+        name = "Sync Labs"
+        description = (
+            "Inspect each Deployed or Failed lab that you can view and change on its containerlab host. Schedule the "
+            "job to keep the lab status current. The job changes nothing on the host."
+        )
+        has_sensitive_variables = False
+        soft_time_limit = 3500
+        time_limit = 3600
+        is_singleton = True
+
+    def run(self):  # pylint: disable=arguments-differ
+        """Sync each lab in scope, log one result line for each lab, and log a summary.
+
+        Returns:
+            The count of the labs in scope and of each outcome, or None if a lab status is missing.
+
+        Raises:
+            SoftTimeLimitExceeded: If the Celery soft time limit stopped the sync.
+        """
+        labs = sync_targets(self.user)
+        logged = set()
+        counts = Counter()
+        try:
+            for outcome in sync_labs(labs):
+                extra = {"object": outcome.lab}
+                if outcome.result:
+                    for warning in outcome.result.warnings:
+                        self.logger.warning(warning, extra=extra)
+                    self.logger.success(_synced_line(outcome), extra=extra)
+                elif outcome.kind is SyncKind.SKIPPED:
+                    self.logger.warning(outcome.line, extra=extra)
+                else:
+                    self.fail(outcome.line, extra=extra)
+                logged.add(outcome.lab.pk)
+                counts[outcome.kind.value] += 1
+        except ValidationError as error:
+            for line in error_lines(error):
+                self.fail(line)
+            return None
+        except SoftTimeLimitExceeded:
+            for lab in labs:
+                if lab.pk not in logged:
+                    self.fail(SYNC_TIME_LIMIT_MESSAGE.format(lab=lab, host=lab.host), extra={"object": lab})
+            raise
+        totals = {kind.value: counts[kind.value] for kind in SyncKind}
+        summary = SYNC_SUMMARY.format(labs=len(labs), **totals)
+        self.logger.info(summary)
+        return {"labs": len(labs), **totals}
+
+
+def _synced_line(outcome):
+    """Return the success line of a lab that synced."""
+    result = outcome.result
+    template = SYNC_CHANGED_SUMMARY if outcome.kind is SyncKind.CHANGED else SYNC_UNCHANGED_SUMMARY
+    return template.format(
+        lab=result.lab,
+        host=result.lab.host,
+        nodes=result.node_count,
+        running=result.running_count,
+        warnings=len(result.warnings),
+        status=result.lab.status,
+    )
+
+
+jobs = [BuildLabTopology, DeployLab, RedeployLab, DestroyLab, InspectLab, SyncLabs]
 register_jobs(*jobs)
