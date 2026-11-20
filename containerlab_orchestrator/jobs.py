@@ -1,7 +1,5 @@
 """Jobs of the containerlab_orchestrator app."""
 
-from collections import Counter
-
 from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from nautobot.apps.jobs import BooleanVar, Job, ObjectVar, register_jobs
@@ -382,7 +380,7 @@ class SyncLabs(Job):
         """
         labs = sync_targets(self.user)
         logged = set()
-        counts = Counter()
+        counts = dict.fromkeys((kind.value for kind in SyncKind), 0)
         try:
             for outcome in sync_labs(labs):
                 extra = {"object": outcome.lab}
@@ -405,10 +403,9 @@ class SyncLabs(Job):
                 if lab.pk not in logged:
                     self.fail(SYNC_TIME_LIMIT_MESSAGE.format(lab=lab, host=lab.host), extra={"object": lab})
             raise
-        totals = {kind.value: counts[kind.value] for kind in SyncKind}
-        summary = SYNC_SUMMARY.format(labs=len(labs), **totals)
+        summary = SYNC_SUMMARY.format(labs=len(labs), **counts)
         self.logger.info(summary)
-        return {"labs": len(labs), **totals}
+        return {"labs": len(labs), **counts}
 
 
 def _synced_line(outcome):
