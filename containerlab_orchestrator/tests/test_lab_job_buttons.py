@@ -5,6 +5,7 @@ from unittest import mock
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import DatabaseError
+from django.template.loader import render_to_string
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.html import escapejs
@@ -151,6 +152,15 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
 
     def test_turned_off_job_has_no_button(self):
         Job.objects.filter(module_name=LAB_JOB_MODULE, job_class_name="DeployLab").update(enabled=False)
+
+        self.assertEqual(self.shown_labels(self.get_body()), ["Build", "Redeploy", "Destroy", "Inspect"])
+
+    def test_job_of_another_module_with_a_lab_job_name_gives_no_button(self):
+        lab_deploy = Job.objects.filter(module_name=LAB_JOB_MODULE, job_class_name="DeployLab")
+        lab_deploy.update(enabled=False)
+        other_deploy = lab_deploy.values().get()
+        other_deploy.update(id=None, module_name="other_app.jobs", name="Other Deploy Lab", enabled=True)
+        Job.objects.create(**other_deploy)
 
         self.assertEqual(self.shown_labels(self.get_body()), ["Build", "Redeploy", "Destroy", "Inspect"])
 
@@ -317,3 +327,11 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
         for button in views.LAB_JOB_BUTTONS:
             with self.subTest(button=button.label):
                 self.assertNotIn("onclick", button_html(body, button))
+
+    def test_confirmation_script_escapes_the_text_and_listens_only_on_a_link(self):
+        script = render_to_string(
+            views.LAB_JOB_CONFIRM_SCRIPT, {"component": lab_job_button("Destroy"), "confirm_text": 'Say "yes" </script>'}
+        )
+
+        self.assertIn(r'window.confirm("Say \u0022yes\u0022 \u003C/script\u003E")', script)
+        self.assertIn("if (button instanceof HTMLAnchorElement) {", script)
