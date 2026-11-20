@@ -41,6 +41,7 @@ from containerlab_orchestrator.sync import (
     SYNC_TIME_LIMIT_MESSAGE,
     SyncKind,
     _is_busy,
+    _job_lab,
     sync_labs,
     sync_targets,
 )
@@ -410,6 +411,8 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         self.assertEqual(JobResult.objects.get(pk=job_result.pk).task_kwargs, {"lab": str(self.lab_a.pk)})
         self.assertTrue(_is_busy(self.lab_a))
         self.assertFalse(_is_busy(self.lab_b))
+        lab_id = str(self.lab_a.pk)
+        self.assertEqual([_job_lab({"lab": self.lab_a.pk}), _job_lab({"lab": {"id": self.lab_a.pk}})], [lab_id, lab_id])
 
     def test_results_that_do_not_make_a_lab_busy(self):
         lab_id = str(self.lab_a.pk)
