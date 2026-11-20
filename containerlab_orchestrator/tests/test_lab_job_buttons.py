@@ -22,13 +22,8 @@ from containerlab_orchestrator.tests.test_views import LAB_DETAIL_PERMISSIONS, c
 read_lab_job_access = views._read_lab_job_access  # pylint: disable=protected-access
 LAB_JOB_PERMISSIONS = (*LAB_DETAIL_PERMISSIONS, "extras.run_job", "containerlab_orchestrator.change_lab")
 LAB_JOB_MODULE = "containerlab_orchestrator.jobs"
-ALL_LAB_STATUSES = (
-    LabStatusChoices.PLANNED,
-    LabStatusChoices.BUILT,
-    LabStatusChoices.DEPLOYED,
-    LabStatusChoices.FAILED,
-    LabStatusChoices.DESTROYED,
-)
+ALL_LAB_STATUSES = tuple(LabStatusChoices.values())
+ALL_LABELS = ["Build", "Deploy", "Redeploy", "Destroy", "Inspect"]
 EXPECTED_LAB_JOB_BUTTONS = {
     "Build": ("BuildLabTopology", "default", ALL_LAB_STATUSES, ""),
     "Deploy": (
@@ -128,10 +123,7 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
                 self.assertIn(f'class="btn btn-{color}"', element)
                 self.assertIn(label, element)
                 self.assertNotIn("disabled", element)
-        self.assertEqual(
-            button_ids(body),
-            [lab_job_button(label).component_id for label in ("Build", "Deploy", "Redeploy", "Destroy", "Inspect")],
-        )
+        self.assertEqual(button_ids(body), [lab_job_button(label).component_id for label in ALL_LABELS])
 
     def test_run_form_of_each_button_selects_the_lab(self):
         for job_class_name, job_name in (
@@ -184,25 +176,20 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
         body = self.get_body(self.lab_b)
 
         self.assertEqual(self.shown_labels(body), ["Inspect"])
-        self.assertTrue(
-            button_html(body, lab_job_button("Inspect")).startswith(
-                f'<a href="{run_form_url("InspectLab", self.lab_b)}"'
-            )
-        )
+        inspect_link = run_form_url("InspectLab", self.lab_b)
+        self.assertTrue(button_html(body, lab_job_button("Inspect")).startswith(f'<a href="{inspect_link}"'))
 
     def test_superuser_sees_changing_buttons_on_lab_of_other_owner(self):
         self.make_superuser()
 
-        self.assertEqual(
-            self.shown_labels(self.get_body(self.lab_b)), ["Build", "Deploy", "Redeploy", "Destroy", "Inspect"]
-        )
+        self.assertEqual(self.shown_labels(self.get_body(self.lab_b)), ALL_LABELS)
 
     def test_lab_with_no_owner_shows_changing_buttons_only_to_superuser(self):
         Lab.objects.filter(pk=self.lab_a.pk).update(owner=None)
 
         self.assertEqual(self.shown_labels(self.get_body()), ["Inspect"])
         self.make_superuser()
-        self.assertEqual(self.shown_labels(self.get_body()), ["Build", "Deploy", "Redeploy", "Destroy", "Inspect"])
+        self.assertEqual(self.shown_labels(self.get_body()), ALL_LABELS)
 
     def test_user_without_change_permission_sees_no_button(self):
         self.remove_permissions("containerlab_orchestrator.change_lab")
@@ -249,7 +236,7 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
 
         self.assertIn("Download YAML", yaml_tab)
         self.assertEqual(self.shown_labels(yaml_tab), [])
-        self.assertEqual(self.shown_labels(main_tab), ["Build", "Deploy", "Redeploy", "Destroy", "Inspect"])
+        self.assertEqual(self.shown_labels(main_tab), ALL_LABELS)
         self.add_permissions("extras.view_objectchange")
         response = self.client.get(
             reverse("plugins:containerlab_orchestrator:lab_changelog", kwargs={"pk": self.lab_a.pk})
@@ -269,15 +256,7 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
         self.make_superuser()
         with self.assertNumQueries(3):
             access = read_lab_job_access(self.user, lab_a)
-        self.assertEqual(
-            access,
-            views.LabJobAccess(
-                frozenset({"BuildLabTopology", "DeployLab", "RedeployLab", "DestroyLab", "InspectLab"}),
-                True,
-                True,
-                False,
-            ),
-        )
+        self.assertEqual(access, views.LabJobAccess(frozenset(views.LAB_JOB_CLASS_NAMES), True, True, False))
 
         self.user.is_superuser = False
         self.user.save()
