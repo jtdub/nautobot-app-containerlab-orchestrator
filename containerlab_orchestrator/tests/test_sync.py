@@ -40,8 +40,8 @@ from containerlab_orchestrator.sync import (
     SYNC_HOST_SKIPPED_MESSAGE,
     SYNC_TIME_LIMIT_MESSAGE,
     SyncKind,
-    is_busy,
     _job_lab,
+    is_busy,
     sync_labs,
     sync_targets,
 )

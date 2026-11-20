@@ -28,7 +28,7 @@ from containerlab_orchestrator.destroy import DESTROY_STATUS_MESSAGE, DESTROY_ST
 from containerlab_orchestrator.inspection import INSPECT_STATUS_MESSAGE, INSPECT_STATUSES
 from containerlab_orchestrator.jobs import DestroyLab, RedeployLab, lab_access_message
 from containerlab_orchestrator.redeploy import REDEPLOY_STATUS_MESSAGE, REDEPLOY_STATUSES
-from containerlab_orchestrator.sync import LAB_JOBS_MODULE
+from containerlab_orchestrator.sync import LAB_JOBS_MODULE, is_busy
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ class LabJobAccess(NamedTuple):
 
 NO_ACCESS = LabJobAccess(frozenset(), False, False, False)
 LAB_JOB_CLASS_NAMES = ("BuildLabTopology", "DeployLab", "RedeployLab", "DestroyLab", "InspectLab")
+BUSY_TOOLTIP = "A lab job of this lab runs."
 LAB_JOB_ACCESS_ATTRIBUTE = "_containerlab_lab_job_access"
 """The request attribute that holds the lab job access of each lab, keyed by the lab pk."""
 
@@ -86,7 +87,7 @@ def _read_lab_job_access(user, lab):
         return NO_ACCESS
     inspect_allowed = lab_access_message(lab, user, "inspect", owner_check=False) == ""
     changing_allowed = inspect_allowed and (user.is_superuser or lab.owner_id == user.pk)
-    return LabJobAccess(runnable, changing_allowed, inspect_allowed, busy=False)
+    return LabJobAccess(runnable, changing_allowed, inspect_allowed, busy=inspect_allowed and is_busy(lab))
 
 
 def lab_job_access(context):
@@ -112,6 +113,7 @@ class LabJobButton(Button):
     """Link to the run form of one lab job with the lab selected, shown only when the job accepts the user.
 
     A status that the job does not accept gives a disabled button with the status message of the job as its title.
+    Else a busy lab gives a disabled button with BUSY_TOOLTIP as its title.
     """
 
     job_class_name = None
@@ -134,7 +136,7 @@ class LabJobButton(Button):
         """Return the reason that the button is disabled, or an empty string if it is enabled."""
         lab = context["object"]
         if self.start_statuses is None or lab.status.name in self.start_statuses:  # pylint: disable=unsupported-membership-test
-            return ""
+            return BUSY_TOOLTIP if lab_job_access(context).busy else ""
         return self.status_message.format(lab=lab, status=lab.status)
 
     def get_link(self, context):
