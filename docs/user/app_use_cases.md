@@ -98,9 +98,9 @@ When two lab jobs of a lab run at the same time, the result depends on the job t
 
 #### A stale result
 
-After a worker stops, a job result can stay Started. The buttons stay disabled until the result is 6 hours old. In
-that time, start the job from Jobs > Jobs. An administrator with `extras.delete_jobresult` can also delete the stale
-result under Jobs > Job Results.
+After a worker stops, a job result can stay Running. The buttons stay disabled until the result is 6 hours old. In
+that time, a user with `extras.view_job` can start the job from Jobs > Jobs. An administrator with
+`extras.delete_jobresult` can also delete the stale result under Jobs > Job Results.
 
 #### Schedules and approval
 
