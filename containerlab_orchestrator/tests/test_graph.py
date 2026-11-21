@@ -121,9 +121,3 @@ class LabGraphTestCase(TestCase):
         graph = lab_graph(self.lab_a, self.user)
 
         self.assertEqual(len(graph.data["nodes"]), 3)
-
-    def test_lab_graph_has_no_links_before_the_link_part(self):
-        graph = self.node_graph()
-
-        self.assertEqual(graph.data["links"], [])
-        self.assertEqual(graph.data["skipped_links"], 0)

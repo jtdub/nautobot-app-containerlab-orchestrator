@@ -272,5 +272,6 @@ def create_lab_nodes(labs, lab_devices):
 
 
 def store_yaml(lab, text):
-    """Store the topology YAML on the lab row, as a build does."""
+    """Store the topology YAML on the lab row, as a build does, and on the lab instance."""
     Lab.objects.filter(pk=lab.pk).update(topology_yaml=text)
+    lab.topology_yaml = text
