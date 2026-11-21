@@ -28,7 +28,7 @@ from containerlab_orchestrator.sync import (
     SYNC_HOST_SKIPPED_MESSAGE,
     SYNC_TIME_LIMIT_MESSAGE,
 )
-from containerlab_orchestrator.tests.fixtures import grant_permission, secret_variable_name
+from containerlab_orchestrator.tests.fixtures import create_lab_job_result, grant_permission, secret_variable_name
 from containerlab_orchestrator.tests.test_clab_client import fake_response, login_response
 from containerlab_orchestrator.tests.test_deploy import OLD_INSPECT
 from containerlab_orchestrator.tests.test_jobs import JOB_MODULE
@@ -149,7 +149,7 @@ class SyncLabsJobTestCase(SyncClientsMixin, TransactionTestCase):
 
     def test_skip_lines_are_in_the_stored_log(self):
         with self.subTest("a busy lab is a warning, and the run ends Completed"):
-            self._lab_job_result({"lab": str(self.lab_a.pk)})
+            create_lab_job_result({"lab": str(self.lab_a.pk)})
             job_result = self.run_sync()
             lines = [
                 self.skipped(self.lab_a, SYNC_BUSY_WARNING),

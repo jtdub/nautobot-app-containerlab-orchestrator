@@ -1,7 +1,9 @@
 """Tests for the lab job buttons of the lab page."""
 
 import re
+from datetime import timedelta
 from unittest import mock
+from uuid import uuid4
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import DatabaseError
@@ -9,14 +11,15 @@ from django.template.loader import render_to_string
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.html import escapejs
+from nautobot.apps.choices import JobResultStatusChoices
 from nautobot.apps.testing import TestCase
-from nautobot.extras.models import Job, Status
+from nautobot.extras.models import Job, JobResult, Status
 
 from containerlab_orchestrator import views
 from containerlab_orchestrator.choices import LabStatusChoices
 from containerlab_orchestrator.jobs import DestroyLab, RedeployLab
 from containerlab_orchestrator.models import Lab
-from containerlab_orchestrator.tests.fixtures import grant_permission
+from containerlab_orchestrator.tests.fixtures import create_lab_job_result, grant_permission
 from containerlab_orchestrator.tests.test_views import LAB_DETAIL_PERMISSIONS, create_lab_view_data
 
 read_lab_job_access = views._read_lab_job_access  # pylint: disable=protected-access
@@ -24,6 +27,7 @@ LAB_JOB_PERMISSIONS = (*LAB_DETAIL_PERMISSIONS, "extras.run_job", "containerlab_
 LAB_JOB_MODULE = "containerlab_orchestrator.jobs"
 ALL_LAB_STATUSES = tuple(LabStatusChoices.values())
 ALL_LABELS = ["Build", "Deploy", "Redeploy", "Destroy", "Inspect"]
+BUSY_TITLE = "A lab job of this lab runs."
 EXPECTED_LAB_JOB_BUTTONS = {
     "Build": ("BuildLabTopology", "default", ALL_LAB_STATUSES, ""),
     "Deploy": (
@@ -78,8 +82,8 @@ def button_ids(body):
 
 
 @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
-class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
-    """Test the Build, Deploy, Redeploy, Destroy, and Inspect buttons of the lab page."""
+class LabJobButtonSetupTestCase(TestCase):
+    """Open the lab page as the owner of lab-a, with the five lab jobs turned on and lab-a Failed."""
 
     @classmethod
     def setUpTestData(cls):
@@ -112,6 +116,16 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
     def shown_labels(self, body):
         """Return the labels of the lab job buttons in the page body, in the order of LAB_JOB_BUTTONS."""
         return [button.label for button in views.LAB_JOB_BUTTONS if button_html(body, button) is not None]
+
+    def assert_disabled(self, element, title):
+        """Assert that the element is a disabled button with the title and no link."""
+        self.assertTrue(element.startswith('<button type="button"'))
+        self.assertIn(f'disabled="disabled" aria-disabled="true" title="{title}"', element)
+        self.assertNotIn("href", element)
+
+
+class LabJobButtonTestCase(LabJobButtonSetupTestCase):  # pylint: disable=too-many-public-methods
+    """Test the Build, Deploy, Redeploy, Destroy, and Inspect buttons of the lab page."""
 
     def test_owner_sees_five_buttons_that_link_to_the_run_form_with_the_lab(self):
         body = self.get_body()
@@ -196,12 +210,6 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
 
         self.assertEqual(self.shown_labels(self.get_body()), [])
 
-    def assert_disabled(self, element, title):
-        """Assert that the element is a disabled button with the title and no link."""
-        self.assertTrue(element.startswith('<button type="button"'))
-        self.assertIn(f'disabled="disabled" aria-disabled="true" title="{title}"', element)
-        self.assertNotIn("href", element)
-
     def test_buttons_follow_the_status_rules(self):
         for status in ALL_LAB_STATUSES:
             self.set_lab_a_status(status)
@@ -254,7 +262,7 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
     def test_access_read_query_counts(self):
         lab_a = Lab.objects.get(pk=self.lab_a.pk)
         self.make_superuser()
-        with self.assertNumQueries(3):
+        with self.assertNumQueries(4):
             access = read_lab_job_access(self.user, lab_a)
         self.assertEqual(access, views.LabJobAccess(frozenset(views.LAB_JOB_CLASS_NAMES), True, True, False))
 
@@ -315,3 +323,75 @@ class LabJobButtonTestCase(TestCase):  # pylint: disable=too-many-public-methods
 
         self.assertIn(r'window.confirm("Say \u0022yes\u0022 \u003C/script\u003E")', script)
         self.assertIn("if (button instanceof HTMLAnchorElement) {", script)
+
+
+class LabJobButtonBusyTestCase(LabJobButtonSetupTestCase):
+    """Test that a lab job of the lab that runs disables the five lab job buttons."""
+
+    def assert_titles(self, body, titles):
+        """Assert that each lab job button is disabled with the title of its label, or enabled for no title."""
+        for label in ALL_LABELS:
+            with self.subTest(label=label):
+                element = button_html(body, lab_job_button(label))
+                if titles.get(label):
+                    self.assert_disabled(element, titles[label])
+                else:
+                    self.assertTrue(element.startswith('<a href="'))
+
+    def test_running_lab_job_disables_the_five_buttons(self):
+        create_lab_job_result({"lab": str(self.lab_a.pk)})
+
+        self.assert_titles(self.get_body(), dict.fromkeys(ALL_LABELS, BUSY_TITLE))
+
+    def test_results_that_do_not_disable_the_buttons(self):
+        other_job = Job.objects.exclude(module_name=LAB_JOB_MODULE).first()
+        self.assertIsNotNone(other_job)
+        changes_of_a_busy_result = {
+            "older than 6 hours": {"age": timedelta(hours=6, minutes=1)},
+            "status SUCCESS": {"status": JobResultStatusChoices.STATUS_SUCCESS},
+            "another lab": {"task_kwargs": {"lab": str(uuid4())}},
+            "a job of another module": {"job_model": other_job},
+            "no lab input": {"task_kwargs": {}},
+        }
+        for name, change in changes_of_a_busy_result.items():
+            with self.subTest(name):
+                JobResult.objects.all().delete()
+                create_lab_job_result(**{"task_kwargs": {"lab": str(self.lab_a.pk)}, **change})
+                self.assert_titles(self.get_body(), {})
+
+    def test_stale_result_disables_until_six_hours(self):
+        result = create_lab_job_result({"lab": str(self.lab_a.pk)}, age=timedelta(hours=5, minutes=59))
+        self.assert_titles(self.get_body(), dict.fromkeys(ALL_LABELS, BUSY_TITLE))
+
+        result.delete()
+        create_lab_job_result({"lab": str(self.lab_a.pk)}, age=timedelta(hours=6, minutes=1))
+        self.assert_titles(self.get_body(), {})
+
+    def test_status_reason_comes_before_busy_reason(self):
+        self.set_lab_a_status(LabStatusChoices.PLANNED)
+        create_lab_job_result({"lab": str(self.lab_a.pk)})
+
+        titles = {label: values[3].format(status="Planned") for label, values in EXPECTED_LAB_JOB_BUTTONS.items()}
+        self.assert_titles(self.get_body(), {**titles, "Build": BUSY_TITLE})
+
+    def test_no_busy_query_without_a_lab_job_button(self):
+        create_lab_job_result({"lab": str(self.lab_a.pk)})
+        for name, permission in (
+            ("no run permission", "extras.run_job"),
+            ("no change permission", "containerlab_orchestrator.change_lab"),
+        ):
+            with self.subTest(name), mock.patch.object(views, "is_busy") as busy:
+                self.remove_permissions(permission)
+                self.assertEqual(self.shown_labels(self.get_body()), [])
+                busy.assert_not_called()
+                self.add_permissions(permission)
+        create_lab_job_result({"lab": str(self.lab_b.pk)})
+        Job.objects.filter(module_name=LAB_JOB_MODULE, job_class_name="InspectLab").update(enabled=False)
+        with self.subTest("not the owner, and Inspect Lab turned off"), mock.patch.object(views, "is_busy") as busy:
+            self.assertEqual(self.shown_labels(self.get_body(self.lab_b)), [])
+            busy.assert_not_called()
+
+        self.make_superuser()
+        lab_a = Lab.objects.get(pk=self.lab_a.pk)
+        with self.assertNumQueries(4):
+            self.assertTrue(read_lab_job_access(self.user, lab_a).busy)

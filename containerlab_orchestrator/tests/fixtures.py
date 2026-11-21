@@ -7,14 +7,25 @@ from unittest import mock
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from nautobot.apps.choices import SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
+from django.utils import timezone
+from nautobot.apps.choices import JobResultStatusChoices, SecretsGroupAccessTypeChoices, SecretsGroupSecretTypeChoices
 from nautobot.dcim.models import Device, DeviceType, Location, LocationType, Manufacturer, Platform
-from nautobot.extras.models import DynamicGroup, Role, Secret, SecretsGroup, SecretsGroupAssociation, Status
+from nautobot.extras.models import (
+    DynamicGroup,
+    Job,
+    JobResult,
+    Role,
+    Secret,
+    SecretsGroup,
+    SecretsGroupAssociation,
+    Status,
+)
 from nautobot.users.models import ObjectPermission
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
 from containerlab_orchestrator.constants import REQUIRED_HTTP_SECRET_TYPES
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, LabNode, NodeMapping
+from containerlab_orchestrator.sync import LAB_JOBS_MODULE
 
 SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the REST API and GraphQL must never return."""
@@ -65,6 +76,20 @@ def grant_permission(user, model, action, constraints=None):
     permission.users.add(user)
     permission.object_types.add(ContentType.objects.get_for_model(model))
     return permission
+
+
+def create_lab_job_result(task_kwargs, age=None, **fields):
+    """Save a result of the Inspect Lab job with the kwargs, STARTED and new unless the arguments say other."""
+    values = {
+        "job_model": Job.objects.get(module_name=LAB_JOBS_MODULE, job_class_name="InspectLab"),
+        "name": "Inspect Lab",
+        "status": JobResultStatusChoices.STATUS_STARTED,
+        **fields,
+    }
+    result = JobResult.objects.create(task_kwargs=task_kwargs, **values)
+    if age is not None:
+        JobResult.objects.filter(pk=result.pk).update(date_created=timezone.now() - age)
+    return result
 
 
 def create_lab_statuses():

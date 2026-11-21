@@ -29,6 +29,85 @@ curl -H "Authorization: Token $TOKEN" -OJ "https://<nautobot>/api/plugins/contai
 
 The labs REST API does not return `topology_yaml`, because the text can be large. Use the topology URL above.
 
+### Start a lab job from the lab page
+
+#### The buttons
+
+The main tab of the lab page has a button for each lab job, in this order. The other tabs do not show them.
+
+| Button | Job |
+|---|---|
+| Build | Build Lab Topology |
+| Deploy | Deploy Lab |
+| Redeploy | Redeploy Lab |
+| Destroy | Destroy Lab |
+| Inspect | Inspect Lab |
+
+A button opens the run form of its job with the lab selected. Select "Run Job Now" to start the job. Destroy and
+Redeploy ask you to confirm the WARNING of the job before the run form opens.
+
+#### Who sees a button
+
+A button shows only when its job accepts the user. The page uses the same checks as the job.
+
+| Condition | Buttons |
+|---|---|
+| An administrator turned on the job. See "Turn on the job" of each job. | The button of that job |
+| The user has `extras.run_job` for the job. | The button of that job |
+| The user has `containerlab_orchestrator.view_lab` and `containerlab_orchestrator.change_lab` on the lab. | All five |
+| The user is the owner of the lab, or a superuser. | Build, Deploy, Redeploy, and Destroy |
+
+A user who is not the owner and not a superuser sees only Inspect. A lab with no owner shows Build, Deploy, Redeploy, and Destroy only to a
+superuser. The buttons do not need `extras.view_job`.
+
+#### When a button is disabled
+
+A disabled button shows the reason when you put the mouse pointer on it. A disabled button gets no keyboard focus, so
+this table gives each reason.
+
+| Button | Enabled when the lab is | Reason when the lab is Planned |
+|---|---|---|
+| Build | Each status | (none) |
+| Deploy | Built, Destroyed, or Failed | "Lab lab-a is Planned. Only a Built, Destroyed, or Failed lab can deploy." |
+| Redeploy | Deployed or Failed | "Lab lab-a is Planned. Only a Deployed or Failed lab can redeploy." |
+| Destroy | Deployed or Failed | "Lab lab-a is Planned. Only a Deployed or Failed lab can destroy." |
+| Inspect | Built, Deployed, Failed, or Destroyed | "Lab lab-a is Planned. The job inspects only a Built, Deployed, Failed, or Destroyed lab." |
+
+While the lab is busy, each button is disabled with "A lab job of this lab runs.". When the status also disables a
+button, the button shows the status reason.
+
+#### A busy lab
+
+A lab is busy when a Build Lab Topology, Deploy Lab, Redeploy Lab, Destroy Lab, or Inspect Lab job of the lab is not
+done. Only a job result of the last 6 hours makes the lab busy. Sync Labs uses the same rule. Reload the page after the
+job ends.
+
+The busy rule is only on the lab page. A job that starts from Jobs > Jobs, from a schedule, or from the REST API does
+not check it. A queued job does not make the lab busy until a worker starts it.
+
+When two lab jobs of a lab run at the same time, the result depends on the job that writes first:
+
+- A second Destroy Lab calls the host. If the first Destroy Lab writes first, the second fails with `Lab <lab> changed
+  its status while the job ran, so the job did not set Destroyed. ...`.
+- A Build Lab Topology during a Deploy Lab of a Built or Failed lab succeeds. The Deploy Lab ends with the warning
+  `Lab <lab> got a new build during the deploy. ...`. Then redeploy the lab.
+- For a Destroyed lab, the build sets Built. Then the Deploy Lab fails with `Lab <lab> changed its status while the job
+  ran, so the job did not set Deployed. ...`.
+- In each other pair, one job can fail at its check with a message, or both jobs can succeed. See "Inspect during
+  another job".
+
+#### A stale result
+
+After a worker stops, a job result can stay Running. The buttons stay disabled until the result is 6 hours old. In
+that time, a user with `extras.view_job` can start the job from Jobs > Jobs. An administrator with
+`extras.delete_jobresult` can also delete the stale result under Jobs > Job Results.
+
+#### Schedules and approval
+
+The run form can also schedule the job. A scheduled run has no job result until it starts, so the busy rule does not
+see it. On a site with an approval workflow for the job, "Run Job Now" sends the run to approval. That run has no job
+result until it starts. When the job runs, it checks the status of the lab and the access of the user again.
+
 ## Use-cases and common workflows
 
 ### Build a lab
@@ -628,6 +707,8 @@ Do not run Inspect Lab while a Deploy Lab, Destroy Lab, or Redeploy Lab job of t
 first, the other job can fail with `Lab <lab> changed its status while the job ran...`. If the other job writes
 first, Inspect Lab fails with `Lab <lab> changed while the job ran, so the job wrote nothing. Run the job again.`.
 A build or an edit of the lab during the job gives the same failure. Then run Inspect Lab again.
+
+The Inspect button of the lab page is disabled while a lab job of the lab runs.
 
 Sync Labs skips a lab while another lab job of that lab runs. See "Sync all labs".
 
