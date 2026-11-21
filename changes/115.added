@@ -1,0 +1,2 @@
+Added the node graph to the Topology tab: green for running, red for not running, and grey for not inspected.
+Added a tooltip that shows the kind, image, and management address of a node, or the two interfaces of a line.

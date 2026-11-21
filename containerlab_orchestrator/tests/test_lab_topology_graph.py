@@ -24,6 +24,7 @@ from containerlab_orchestrator.tests.test_lab_job_buttons import LAB_JOB_PERMISS
 from containerlab_orchestrator.tests.test_views import LAB_DETAIL_PERMISSIONS, create_lab_view_data
 from containerlab_orchestrator.views import (
     GRAPH_CAPTION_TEXT,
+    GRAPH_NO_LIBRARY_TEXT,
     GRAPH_YAML_LIMIT,
     LARGE_GRAPH_TEXT,
     NO_BUILD_TEXT,
@@ -188,3 +189,21 @@ class LabTopologyGraphTabTestCase(TestCase):
 
         self.assertIn(NO_VIEWABLE_NODES_TEXT, topology_pane(body))
         self.assert_no_chart(body)
+
+    def test_graph_script_waits_for_the_page_and_watches_the_size(self):
+        pane = topology_pane(self.get_lab_a_body())
+
+        for text in (
+            "DOMContentLoaded",
+            "ResizeObserver",
+            "[data-no-library-text]",
+            f'data-no-library-text="{GRAPH_NO_LIBRARY_TEXT}"',
+            "darkMode",
+            'roamTrigger: "global"',
+            "fixed: true",
+            "pinWhenStill(chart, items)",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, pane)
+        self.assertNotIn("window.nb.echarts", pane)
+        self.assertNotIn("MutationObserver", pane)
