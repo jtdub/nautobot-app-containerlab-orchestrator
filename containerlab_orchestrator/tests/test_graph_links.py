@@ -46,7 +46,6 @@ class LabGraphLinksTestCase(TestCase):
     def yaml_graph(self, text):
         """Return the graph of lab-a for the test user, after the lab stores the topology YAML."""
         store_yaml(self.lab_a, text)
-        self.lab_a.refresh_from_db()
         return lab_graph(self.lab_a, self.user)
 
     def test_lab_graph_draws_each_yaml_link_with_endpoint_text(self):

@@ -37,7 +37,6 @@ class LabGraphTestCase(TestCase):
         create_lab_nodes(labs, lab_devices)
         cls.lab_a = labs[0]
         store_yaml(cls.lab_a, LINKS_YAML)
-        cls.lab_a.refresh_from_db()
 
     def node_graph(self, constraints=None):
         """Return the graph of lab-a for the test user, with the view permission of the node rows."""

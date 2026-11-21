@@ -131,7 +131,7 @@ def lab_graph(lab, user):
     if items is None:
         return LabGraph(None, UNREADABLE_YAML_TEXT)
     names = {row.node_name for row in rows}
-    links = [line for line in (_link(item, names) for item in items) if line]
+    links = [line for item in items if (line := _link(item, names))]
     data = {
         "nodes": [_node(row) for row in rows],
         "links": links,
