@@ -15,8 +15,10 @@ from nautobot.apps.ui import (
     ObjectFieldsPanel,
     ObjectsTablePanel,
     ObjectTextPanel,
+    Panel,
     SectionChoices,
     Tab,
+    render_component_template,
 )
 from nautobot.apps.views import NautobotUIViewSet
 from nautobot.extras.models import Job
@@ -25,6 +27,7 @@ from containerlab_orchestrator import filters, forms, models, tables
 from containerlab_orchestrator.api import serializers
 from containerlab_orchestrator.deploy import DEPLOY_STATUSES, STATUS_MESSAGE
 from containerlab_orchestrator.destroy import DESTROY_STATUS_MESSAGE, DESTROY_STATUSES
+from containerlab_orchestrator.graph import SKIPPED_LINKS_TEXT, STATE_GROUPS, lab_graph
 from containerlab_orchestrator.inspection import INSPECT_STATUS_MESSAGE, INSPECT_STATUSES
 from containerlab_orchestrator.jobs import DestroyLab, RedeployLab, lab_access_message
 from containerlab_orchestrator.redeploy import REDEPLOY_STATUS_MESSAGE, REDEPLOY_STATUSES
@@ -37,6 +40,13 @@ NO_BUILD_TEXT = "This lab has no topology. Run the Build Lab Topology job."
 LARGE_YAML_TEXT = "The topology YAML has {size}. Use Download YAML to get it."
 TAB_YAML_LIMIT = 1_000_000
 """The most characters of topology YAML that the Topology YAML tab shows."""
+GRAPH_CHART_ID = "lab-topology-graph"
+GRAPH_TEMPLATE = "containerlab_orchestrator/lab_topology_graph.html"
+GRAPH_YAML_LIMIT = 10_000_000
+"""The most characters of topology YAML that the Topology tab reads for the graph."""
+GRAPH_CAPTION_TEXT = "The colors show the last stored state of each node. Run Inspect Lab to read the state again."
+GRAPH_NO_LIBRARY_TEXT = "The graph cannot load. The Nodes table on the main tab shows the same nodes."
+LARGE_GRAPH_TEXT = "The topology YAML has {size}. The graph shows a topology YAML of 10,000,000 characters or less."
 
 
 class TopologyYamlPanel(ObjectTextPanel):
@@ -50,6 +60,32 @@ class TopologyYamlPanel(ObjectTextPanel):
         if len(value) > TAB_YAML_LIMIT:
             return format_html("<p>{}</p>", LARGE_YAML_TEXT.format(size=f"{len(value):,} characters"))
         return super().render_body_content(context)
+
+
+class TopologyGraphPanel(Panel):
+    """Show the graph data, the legend, and the caption of the lab graph, or a message when the graph cannot show."""
+
+    def render_body_content(self, context):
+        """Return the panel body for the graph of the lab in the context."""
+        lab = context["object"]
+        if not lab.topology_yaml:
+            return format_html("<p>{}</p>", NO_BUILD_TEXT)
+        if len(lab.topology_yaml) > GRAPH_YAML_LIMIT:
+            return format_html("<p>{}</p>", LARGE_GRAPH_TEXT.format(size=f"{len(lab.topology_yaml):,} characters"))
+        graph = lab_graph(lab, context["request"].user)
+        if graph.message:
+            return format_html("<p>{}</p>", graph.message)
+        skipped = graph.data["skipped_links"]
+        return render_component_template(
+            GRAPH_TEMPLATE,
+            context,
+            chart_id=GRAPH_CHART_ID,
+            graph_data=graph.data,
+            state_groups=STATE_GROUPS,
+            caption_text=GRAPH_CAPTION_TEXT,
+            no_library_text=GRAPH_NO_LIBRARY_TEXT,
+            skipped_text=SKIPPED_LINKS_TEXT.format(count=skipped) if skipped else "",
+        )
 
 
 class TopologyDownloadButton(Button):
@@ -389,6 +425,19 @@ class LabUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ancestors
             ),
         ),
         extra_tabs=(
+            Tab(
+                tab_id="topology",
+                label="Topology",
+                weight=Tab.WEIGHT_MAIN_TAB + 40,
+                panels=(
+                    TopologyGraphPanel(
+                        weight=100,
+                        section=SectionChoices.FULL_WIDTH,
+                        label="Topology graph",
+                        body_id="topology-graph",
+                    ),
+                ),
+            ),
             Tab(
                 tab_id="topology_yaml",
                 label="Topology YAML",
