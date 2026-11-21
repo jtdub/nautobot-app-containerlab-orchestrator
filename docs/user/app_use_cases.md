@@ -29,6 +29,54 @@ curl -H "Authorization: Token $TOKEN" -OJ "https://<nautobot>/api/plugins/contai
 
 The labs REST API does not return `topology_yaml`, because the text can be large. Use the topology URL above.
 
+### View the topology graph
+
+The lab page has a "Topology" tab after the main tab. The tab draws one node for each node row of the lab. It draws one
+line for each link of the stored topology YAML between two nodes that the graph shows.
+
+| Node | Meaning |
+|---|---|
+| Green, "Running" | The container state is `running`. |
+| Red, "Not running" | The container has another state, for example `exited`. |
+| Grey, "Not inspected" | The node has no state. |
+| Square, "Stub node" | The node is a stub node. Each other node is a circle. |
+
+The Deploy Lab, Redeploy Lab, Inspect Lab, and Sync Labs jobs write the state. Destroy Lab clears it. A build keeps the
+state of each node that it keeps, and a new node has no state.
+
+The page reads the state when it loads. To see a new state, run Inspect Lab, then reload the page.
+
+Put the mouse pointer on a node to see its name, kind, image, management IPv4 address, and state. An empty value shows
+"None". Put the mouse pointer on a line to see its two interfaces, for example "leaf1:eth1 to spine1:eth1".
+
+Drag a node to move it. Drag the background to move the graph. Use the mouse wheel to zoom. The page does not keep the
+positions.
+
+The node colors are the same in the light theme and in the dark theme. A screen reader gets the number of nodes and
+links, and the node names of each state group. The Nodes table on the main tab gives the same values as text, for a
+keyboard user and for a user who cannot see the colors.
+
+#### Who sees the graph
+
+The graph needs the `containerlab_orchestrator.view_labnode` permission. It shows only the node rows that you can view,
+the same as the Nodes table. A link to a node that you cannot view does not show, and the note counts it. The Topology
+YAML tab still shows the full topology to each user who can view the lab.
+
+#### Messages on the tab
+
+| Message | Cause |
+|---|---|
+| `This lab has no topology. Run the Build Lab Topology job.` | The lab has no build. |
+| `You do not have permission to view the nodes of this lab.` | You do not have `containerlab_orchestrator.view_labnode`. |
+| `You cannot view any node of this lab.` | Your permission matches no node row of the lab. |
+| `This lab has no nodes.` | The lab has no node rows. |
+| `The app cannot read the topology YAML of this lab. Run the Build Lab Topology job again.` | The stored YAML is not valid YAML. Or the YAML, its `topology` part, or its `links` part has the wrong type. |
+| `The topology YAML has <size>. The graph shows a topology YAML of 10,000,000 characters or less.` | The YAML has more than 10,000,000 characters. Use the "Download YAML" button on the Topology YAML tab to get the file. |
+| `Links that the graph does not show: <count>.` | A link does not have two `node:interface` endpoints, or an endpoint names a node that the graph does not show. The graph shows the other links. |
+| `The graph cannot load. The Nodes table on the main tab shows the same nodes.` | The browser cannot draw the graph with the ECharts library of Nautobot. |
+
+The graph uses the ECharts library that Nautobot loads, so the page loads no script from another site.
+
 ### Start a lab job from the lab page
 
 #### The buttons
