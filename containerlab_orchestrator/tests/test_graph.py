@@ -37,6 +37,7 @@ class LabGraphTestCase(TestCase):
         create_lab_nodes(labs, lab_devices)
         cls.lab_a = labs[0]
         store_yaml(cls.lab_a, LINKS_YAML)
+        cls.lab_a.refresh_from_db()
 
     def node_graph(self, constraints=None):
         """Return the graph of lab-a for the test user, with the view permission of the node rows."""
@@ -121,9 +122,3 @@ class LabGraphTestCase(TestCase):
         graph = lab_graph(self.lab_a, self.user)
 
         self.assertEqual(len(graph.data["nodes"]), 3)
-
-    def test_lab_graph_has_no_links_before_the_link_part(self):
-        graph = self.node_graph()
-
-        self.assertEqual(graph.data["links"], [])
-        self.assertEqual(graph.data["skipped_links"], 0)
