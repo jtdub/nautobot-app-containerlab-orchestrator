@@ -199,6 +199,9 @@ class LabTopologyGraphTabTestCase(TestCase):
             "[data-no-library-text]",
             f'data-no-library-text="{GRAPH_NO_LIBRARY_TEXT}"',
             "darkMode",
+            'roamTrigger: "global"',
+            "fixed: true",
+            "pinWhenStill(chart, items)",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, pane)

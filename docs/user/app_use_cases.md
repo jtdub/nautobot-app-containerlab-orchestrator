@@ -49,8 +49,11 @@ The page reads the state when it loads. To see a new state, run Inspect Lab, the
 Put the mouse pointer on a node to see its name, kind, image, management IPv4 address, and state. An empty value shows
 "None". Put the mouse pointer on a line to see its two interfaces, for example "leaf1:eth1 to spine1:eth1".
 
-Drag a node to move it. Drag the background to move the graph. Use the mouse wheel to zoom. The page does not keep the
-positions.
+The graph moves the nodes for some seconds after it opens, then it stops. After that, a theme switch or a window
+resize does not move a node.
+
+Drag a node to move it. After the graph stops, the node stays where you drop it. Drag the background to move the graph.
+Use the mouse wheel to zoom. The page does not keep the positions.
 
 The node colors are the same in the light theme and in the dark theme. A screen reader gets the number of nodes and
 links, and the node names of each state group. The Nodes table on the main tab gives the same values as text. This
