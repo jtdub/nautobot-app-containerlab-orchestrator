@@ -38,7 +38,7 @@ UNREADABLE_YAML_TEXT = "The app cannot read the topology YAML of this lab. Run t
 SKIPPED_LINKS_TEXT = "Links that the graph does not show: {count}."
 """The note for the links of the topology YAML that the graph cannot draw."""
 
-YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)  # pylint: disable=invalid-name
 """The safe YAML loader of LibYAML when it is present, because it reads a large YAML fast."""
 
 
