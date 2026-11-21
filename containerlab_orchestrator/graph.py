@@ -75,7 +75,7 @@ def _yaml_links(topology_yaml):
     """
     try:
         document = yaml.load(topology_yaml, Loader=YAML_LOADER)  # noqa: S506
-    except yaml.YAMLError:
+    except (yaml.YAMLError, ValueError):
         return None
     if not isinstance(document, dict):
         return None

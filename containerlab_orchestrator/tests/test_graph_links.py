@@ -28,8 +28,12 @@ LINKS_THAT_THE_GRAPH_SKIPS = """    - endpoints: ["ghost:eth1", "leaf1:eth2"]
     - endpoints: [":eth1", "spine1:eth4"]
     - endpoints: ["leaf1:eth4"]
     - bad
+    - endpoints: ["leaf1:eth5", "spine1:eth5", "stub-wan1:eth5"]
+    - endpoints: ["leaf1:eth6", "spine1"]
+    - endpoints: [1, "spine1:eth6"]
+    - endpoints: 5
 """
-"""Six more link items for LINKS_YAML that the graph cannot draw."""
+"""Ten more link items for LINKS_YAML that the graph cannot draw."""
 
 
 @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
@@ -62,7 +66,7 @@ class LabGraphLinksTestCase(TestCase):
         graph = self.yaml_graph(LINKS_YAML + LINKS_THAT_THE_GRAPH_SKIPS)
 
         self.assertEqual(graph.data["links"], DRAWN_LINKS)
-        self.assertEqual(graph.data["skipped_links"], 6)
+        self.assertEqual(graph.data["skipped_links"], 10)
 
     def test_lab_graph_skips_links_to_rows_the_user_cannot_view(self):
         grant_permission(self.user, LabNode, "view", constraints={"node_name": "leaf1"})
@@ -87,7 +91,15 @@ class LabGraphLinksTestCase(TestCase):
     def test_lab_graph_with_unreadable_yaml_gives_message(self):
         grant_permission(self.user, LabNode, "view")
 
-        for text in ("topology: [", "- a list\n", "topology: [1]\n", "topology:\n  links: 5\n"):
+        texts = (
+            "topology: [",
+            "- a list\n",
+            "topology: [1]\n",
+            "topology:\n  links: 5\n",
+            "topology:\n  x: 2020-13-45\n",
+            'topology: !!python/object/apply:os.system ["true"]\n',
+        )
+        for text in texts:
             with self.subTest(text=text):
                 self.assertEqual(self.yaml_graph(text), LabGraph(None, UNREADABLE_YAML_TEXT))
 
