@@ -1,0 +1,19 @@
+<div id="{{ chart_id }}"
+     data-no-library-text="{{ no_library_text }}"
+     style="width: 100%;
+            height: 36rem"></div>
+{% with "echarts-config-"|add:chart_id as config_id %}
+    {{ graph_data|json_script:config_id }}
+{% endwith %}
+<ul class="list-inline">
+    {% for group in state_groups %}
+        <li class="list-inline-item">
+            <i class="mdi mdi-circle" style="color: {{ group.color }}"></i> {{ group.label }}
+        </li>
+    {% endfor %}
+    <li class="list-inline-item">
+        <i class="mdi mdi-square"></i> Stub node
+    </li>
+</ul>
+<p class="text-secondary">{{ caption_text }}</p>
+{% if skipped_text %}<p class="text-secondary">{{ skipped_text }}</p>{% endif %}
