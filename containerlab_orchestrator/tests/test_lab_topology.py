@@ -8,7 +8,7 @@ from rest_framework import status
 
 from containerlab_orchestrator.api.views import NO_TOPOLOGY_MESSAGE
 from containerlab_orchestrator.models import Lab
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_lab_devices, create_labs
+from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_lab_devices, create_labs, store_yaml
 from containerlab_orchestrator.views import LARGE_YAML_TEXT, NO_BUILD_TEXT, TAB_YAML_LIMIT
 
 TOPOLOGY_URL_NAME = "plugins-api:containerlab_orchestrator-api:lab-topology"
@@ -22,11 +22,6 @@ SCRIPT_YAML = (
 def topology_url(lab):
     """Return the topology download URL of the lab."""
     return reverse(TOPOLOGY_URL_NAME, kwargs={"pk": lab.pk})
-
-
-def store_yaml(lab, text):
-    """Store the topology YAML on the lab row, as a build does."""
-    Lab.objects.filter(pk=lab.pk).update(topology_yaml=text)
 
 
 class LabTopologyAPITestCase(APITestCase):  # pylint: disable=too-many-ancestors

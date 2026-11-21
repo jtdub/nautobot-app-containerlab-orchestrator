@@ -30,6 +30,18 @@ from containerlab_orchestrator.sync import LAB_JOBS_MODULE
 SECRET_VALUE = "clab-secret-value-do-not-show"
 """A secret value that the REST API and GraphQL must never return."""
 
+LINKS_YAML = """name: lab-a
+topology:
+  nodes:
+    leaf1: {kind: ceos, image: ceos:4.32.0F}
+    spine1: {kind: ceos, image: ceos:4.32.0F}
+    stub-wan1: {kind: linux, image: alpine:latest}
+  links:
+    - endpoints: ["leaf1:eth1", "spine1:eth1"]
+    - endpoints: ["spine1:eth2", "stub-wan1:eth1"]
+"""
+"""A stored topology YAML of lab-a with its three nodes and two links."""
+
 
 def secret_variable_name(secret_type):
     """Return the environment variable that the test secret of this type reads."""
@@ -257,3 +269,8 @@ def create_lab_nodes(labs, lab_devices):
         )
         for lab, node_name, device_name, (kind, image), mgmt_ipv4, state, container_id in rows
     ]
+
+
+def store_yaml(lab, text):
+    """Store the topology YAML on the lab row, as a build does."""
+    Lab.objects.filter(pk=lab.pk).update(topology_yaml=text)
