@@ -70,15 +70,27 @@ def _yaml_links(topology_yaml):
 
 
 def _endpoint(value):
-    """Return the node name and the interface of a link endpoint."""
+    """Return the node name and the interface of a link endpoint, or None for an endpoint that the graph cannot draw."""
+    if not isinstance(value, str):
+        return None
     node, _, interface = value.partition(":")
-    return node, interface
+    return (node, interface) if node and interface else None
 
 
-def _link(item):
-    """Return the graph line of the YAML link item."""
-    endpoints = item["endpoints"]
-    (source, _), (target, _) = (_endpoint(value) for value in endpoints)
+def _link(item, names):
+    """Return the graph line of the YAML link item, or None for a link that the graph cannot draw.
+
+    Args:
+        item: One item of the topology links.
+        names: The node names that the graph shows.
+    """
+    endpoints = item.get("endpoints") if isinstance(item, dict) else None
+    if not isinstance(endpoints, list) or len(endpoints) != 2:
+        return None
+    ends = [_endpoint(value) for value in endpoints]
+    if None in ends or any(node not in names for node, _ in ends):
+        return None
+    (source, _), (target, _) = ends
     return {"source": source, "target": target, "endpoints_text": " to ".join(endpoints)}
 
 
@@ -94,11 +106,13 @@ def lab_graph(lab, user):
         if LabNode.objects.filter(lab=lab).exists():
             return LabGraph(None, NO_VIEWABLE_NODES_TEXT)
         return LabGraph(None, NO_NODES_TEXT)
-    links = [_link(item) for item in _yaml_links(lab.topology_yaml)]
+    items = _yaml_links(lab.topology_yaml)
+    names = {row.node_name for row in rows}
+    links = [line for line in (_link(item, names) for item in items) if line]
     data = {
         "nodes": [_node(row) for row in rows],
         "links": links,
-        "skipped_links": 0,
+        "skipped_links": len(items) - len(links),
         "groups": {group.key: {"label": group.label, "color": group.color} for group in STATE_GROUPS},
     }
     return LabGraph(data, "")

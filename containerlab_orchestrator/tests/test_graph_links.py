@@ -22,6 +22,15 @@ DRAWN_LINKS = [
 ]
 """The graph lines of the two links of LINKS_YAML."""
 
+LINKS_THAT_THE_GRAPH_SKIPS = """    - endpoints: ["ghost:eth1", "leaf1:eth2"]
+    - endpoints: ["host:veth1", "leaf1:eth3"]
+    - endpoints: ["leaf1", "spine1:eth3"]
+    - endpoints: [":eth1", "spine1:eth4"]
+    - endpoints: ["leaf1:eth4"]
+    - bad
+"""
+"""Six more link items for LINKS_YAML that the graph cannot draw."""
+
 
 @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
 class LabGraphLinksTestCase(TestCase):
@@ -47,6 +56,22 @@ class LabGraphLinksTestCase(TestCase):
 
         self.assertEqual(graph.data["links"], DRAWN_LINKS)
         self.assertEqual(graph.data["skipped_links"], 0)
+
+    def test_lab_graph_skips_and_counts_links_it_cannot_draw(self):
+        grant_permission(self.user, LabNode, "view")
+
+        graph = self.yaml_graph(LINKS_YAML + LINKS_THAT_THE_GRAPH_SKIPS)
+
+        self.assertEqual(graph.data["links"], DRAWN_LINKS)
+        self.assertEqual(graph.data["skipped_links"], 6)
+
+    def test_lab_graph_skips_links_to_rows_the_user_cannot_view(self):
+        grant_permission(self.user, LabNode, "view", constraints={"node_name": "leaf1"})
+
+        graph = self.yaml_graph(LINKS_YAML)
+
+        self.assertEqual(graph.data["links"], [])
+        self.assertEqual(graph.data["skipped_links"], 2)
 
     def test_lab_graph_with_no_links_section_draws_rows_only(self):
         grant_permission(self.user, LabNode, "view")
