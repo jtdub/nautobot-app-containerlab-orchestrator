@@ -8,7 +8,12 @@ from rest_framework import status
 
 from containerlab_orchestrator.api.views import NO_TOPOLOGY_MESSAGE
 from containerlab_orchestrator.models import Lab
-from containerlab_orchestrator.tests.fixtures import create_containerlab_hosts, create_lab_devices, create_labs, store_yaml
+from containerlab_orchestrator.tests.fixtures import (
+    create_containerlab_hosts,
+    create_lab_devices,
+    create_labs,
+    store_yaml,
+)
 from containerlab_orchestrator.views import LARGE_YAML_TEXT, NO_BUILD_TEXT, TAB_YAML_LIMIT
 
 TOPOLOGY_URL_NAME = "plugins-api:containerlab_orchestrator-api:lab-topology"
