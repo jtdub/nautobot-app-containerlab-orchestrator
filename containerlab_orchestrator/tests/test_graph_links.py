@@ -4,7 +4,7 @@ import yaml
 from django.test import override_settings
 from nautobot.apps.testing import TestCase
 
-from containerlab_orchestrator.graph import YAML_LOADER, lab_graph
+from containerlab_orchestrator.graph import UNREADABLE_YAML_TEXT, YAML_LOADER, LabGraph, lab_graph
 from containerlab_orchestrator.models import LabNode
 from containerlab_orchestrator.tests.fixtures import (
     LINKS_YAML,
@@ -84,6 +84,13 @@ class LabGraphLinksTestCase(TestCase):
                 self.assertEqual(len(graph.data["nodes"]), 3)
                 self.assertEqual(graph.data["links"], [])
                 self.assertEqual(graph.data["skipped_links"], 0)
+
+    def test_lab_graph_with_unreadable_yaml_gives_message(self):
+        grant_permission(self.user, LabNode, "view")
+
+        for text in ("topology: [", "- a list\n", "topology: [1]\n", "topology:\n  links: 5\n"):
+            with self.subTest(text=text):
+                self.assertEqual(self.yaml_graph(text), LabGraph(None, UNREADABLE_YAML_TEXT))
 
     def test_yaml_loader_is_the_c_loader_when_available(self):
         self.assertIs(YAML_LOADER, getattr(yaml, "CSafeLoader", yaml.SafeLoader))

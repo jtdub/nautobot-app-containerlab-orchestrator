@@ -32,6 +32,12 @@ NO_VIEWABLE_NODES_TEXT = "You cannot view any node of this lab."
 NO_NODES_TEXT = "This lab has no nodes."
 """The message for a lab with no node rows."""
 
+UNREADABLE_YAML_TEXT = "The app cannot read the topology YAML of this lab. Run the Build Lab Topology job again."
+"""The message for a stored topology YAML that the graph cannot read."""
+
+SKIPPED_LINKS_TEXT = "Links that the graph does not show: {count}."
+"""The note for the links of the topology YAML that the graph cannot draw."""
+
 YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 """The safe YAML loader of LibYAML when it is present, because it reads a large YAML fast."""
 
@@ -63,10 +69,25 @@ def _node(row):
 
 
 def _yaml_links(topology_yaml):
-    """Return the link items of the topology YAML."""
-    document = yaml.load(topology_yaml, Loader=YAML_LOADER)
-    section = document.get("topology") or {}
-    return section.get("links") or []
+    """Return the link items of the topology YAML, or None for a YAML that the graph cannot read.
+
+    An absent or null topology section, or links section, gives no link items.
+    """
+    try:
+        document = yaml.load(topology_yaml, Loader=YAML_LOADER)  # noqa: S506
+    except yaml.YAMLError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    section = document.get("topology")
+    if section is None:
+        return []
+    if not isinstance(section, dict):
+        return None
+    links = section.get("links")
+    if links is None:
+        return []
+    return links if isinstance(links, list) else None
 
 
 def _endpoint(value):
@@ -107,6 +128,8 @@ def lab_graph(lab, user):
             return LabGraph(None, NO_VIEWABLE_NODES_TEXT)
         return LabGraph(None, NO_NODES_TEXT)
     items = _yaml_links(lab.topology_yaml)
+    if items is None:
+        return LabGraph(None, UNREADABLE_YAML_TEXT)
     names = {row.node_name for row in rows}
     links = [line for line in (_link(item, names) for item in items) if line]
     data = {
