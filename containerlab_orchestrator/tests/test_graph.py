@@ -38,9 +38,9 @@ class LabGraphTestCase(TestCase):
         cls.lab_a = labs[0]
         store_yaml(cls.lab_a, LINKS_YAML)
 
-    def node_graph(self):
+    def node_graph(self, constraints=None):
         """Return the graph of lab-a for the test user, with the view permission of the node rows."""
-        grant_permission(self.user, LabNode, "view")
+        grant_permission(self.user, LabNode, "view", constraints=constraints)
         return lab_graph(self.lab_a, self.user)
 
     def test_state_group_maps_running_empty_and_other_states(self):
@@ -73,16 +73,12 @@ class LabGraphTestCase(TestCase):
         self.assertEqual(graph, LabGraph(None, NO_NODE_PERMISSION_TEXT))
 
     def test_lab_graph_with_constrained_permission_shows_only_those_rows(self):
-        grant_permission(self.user, LabNode, "view", constraints={"node_name": "leaf1"})
-
-        graph = lab_graph(self.lab_a, self.user)
+        graph = self.node_graph(constraints={"node_name": "leaf1"})
 
         self.assertEqual([node["name"] for node in graph.data["nodes"]], ["leaf1"])
 
     def test_lab_graph_with_constraint_that_matches_no_row_gives_message(self):
-        grant_permission(self.user, LabNode, "view", constraints={"node_name": "none"})
-
-        graph = lab_graph(self.lab_a, self.user)
+        graph = self.node_graph(constraints={"node_name": "none"})
 
         self.assertEqual(graph, LabGraph(None, NO_VIEWABLE_NODES_TEXT))
 
