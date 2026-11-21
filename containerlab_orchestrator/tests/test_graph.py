@@ -5,7 +5,15 @@ import json
 from django.test import override_settings
 from nautobot.apps.testing import TestCase
 
-from containerlab_orchestrator.graph import STATE_GROUPS, lab_graph, state_group
+from containerlab_orchestrator.graph import (
+    NO_NODE_PERMISSION_TEXT,
+    NO_NODES_TEXT,
+    NO_VIEWABLE_NODES_TEXT,
+    STATE_GROUPS,
+    LabGraph,
+    lab_graph,
+    state_group,
+)
 from containerlab_orchestrator.models import LabNode
 from containerlab_orchestrator.tests.fixtures import (
     LINKS_YAML,
@@ -59,6 +67,25 @@ class LabGraphTestCase(TestCase):
         self.assertEqual([node["name"] for node in nodes], ["leaf1", "spine1", "stub-wan1"])
         self.assertEqual([node["name"] for node in nodes if node["stub"]], ["stub-wan1"])
 
+    def test_lab_graph_without_node_permission_gives_message(self):
+        graph = lab_graph(self.lab_a, self.user)
+
+        self.assertEqual(graph, LabGraph(None, NO_NODE_PERMISSION_TEXT))
+
+    def test_lab_graph_with_constrained_permission_shows_only_those_rows(self):
+        grant_permission(self.user, LabNode, "view", constraints={"node_name": "leaf1"})
+
+        graph = lab_graph(self.lab_a, self.user)
+
+        self.assertEqual([node["name"] for node in graph.data["nodes"]], ["leaf1"])
+
+    def test_lab_graph_with_constraint_that_matches_no_row_gives_message(self):
+        grant_permission(self.user, LabNode, "view", constraints={"node_name": "none"})
+
+        graph = lab_graph(self.lab_a, self.user)
+
+        self.assertEqual(graph, LabGraph(None, NO_VIEWABLE_NODES_TEXT))
+
     def test_lab_graph_does_not_list_rows_of_another_lab(self):
         graph = self.node_graph()
 
@@ -66,6 +93,11 @@ class LabGraphTestCase(TestCase):
         images = [node["info"]["image"] for node in graph.data["nodes"]]
         self.assertNotIn("leaf2", names)
         self.assertNotIn("ghcr.io/nokia/srlinux:24.10", images)
+
+    def test_lab_graph_with_no_rows_gives_message(self):
+        LabNode.objects.filter(lab=self.lab_a).delete()
+
+        self.assertEqual(self.node_graph(), LabGraph(None, NO_NODES_TEXT))
 
     def test_lab_graph_gives_empty_text_for_no_address_and_no_state(self):
         LabNode.objects.filter(lab=self.lab_a, node_name="leaf1").update(mgmt_ipv4=None, state="")

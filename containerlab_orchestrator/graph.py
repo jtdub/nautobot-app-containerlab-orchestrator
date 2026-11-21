@@ -21,6 +21,15 @@ STATE_GROUPS = (
 )
 """The state groups in legend order, with colors that show on the light and on the dark background."""
 
+NO_NODE_PERMISSION_TEXT = "You do not have permission to view the nodes of this lab."
+"""The message for a user with no view permission of the node rows."""
+
+NO_VIEWABLE_NODES_TEXT = "You cannot view any node of this lab."
+"""The message for a user whose permission constraint matches no node row of the lab."""
+
+NO_NODES_TEXT = "This lab has no nodes."
+"""The message for a lab with no node rows."""
+
 
 class LabGraph(NamedTuple):
     """The graph data of a lab, or None and the message that the page shows in place of the graph."""
@@ -53,7 +62,13 @@ def lab_graph(lab, user):
 
     The caller makes sure that the lab has a stored topology YAML.
     """
-    rows = LabNode.objects.restrict(user, "view").filter(lab=lab).order_by("node_name")
+    if not user.has_perm("containerlab_orchestrator.view_labnode"):
+        return LabGraph(None, NO_NODE_PERMISSION_TEXT)
+    rows = list(LabNode.objects.restrict(user, "view").filter(lab=lab).order_by("node_name"))
+    if not rows:
+        if LabNode.objects.filter(lab=lab).exists():
+            return LabGraph(None, NO_VIEWABLE_NODES_TEXT)
+        return LabGraph(None, NO_NODES_TEXT)
     data = {
         "nodes": [_node(row) for row in rows],
         "links": [],
