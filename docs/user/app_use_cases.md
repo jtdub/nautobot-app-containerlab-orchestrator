@@ -34,7 +34,7 @@ The labs REST API does not return `topology_yaml`, because the text can be large
 The lab page has a "Topology" tab after the main tab. The tab draws one node for each node row of the lab. It draws one
 line for each link of the stored topology YAML between two nodes that the graph shows.
 
-| Node | Meaning |
+| Node | What it shows |
 |---|---|
 | Green, "Running" | The container state is `running`. |
 | Red, "Not running" | The container has another state, for example `exited`. |
@@ -53,8 +53,8 @@ Drag a node to move it. Drag the background to move the graph. Use the mouse whe
 positions.
 
 The node colors are the same in the light theme and in the dark theme. A screen reader gets the number of nodes and
-links, and the node names of each state group. The Nodes table on the main tab gives the same values as text, for a
-keyboard user and for a user who cannot see the colors.
+links, and the node names of each state group. The Nodes table on the main tab gives the same values as text. This
+helps a keyboard user and a user who cannot see the colors.
 
 #### Who sees the graph
 
