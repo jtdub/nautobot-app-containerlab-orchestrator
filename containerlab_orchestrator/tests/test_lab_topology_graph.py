@@ -2,6 +2,7 @@
 
 import json
 import re
+from unittest import mock
 
 from django.test import override_settings
 from django.urls import reverse
@@ -106,8 +107,7 @@ class LabTopologyGraphTabTestCase(TestCase):
 
         for group in STATE_GROUPS:
             with self.subTest(group=group.key):
-                self.assertIn(group.label, pane)
-                self.assertIn(f"color: {group.color}", pane)
+                self.assertIn(f'<i class="mdi mdi-circle" style="color: {group.color}"></i> {group.label}', pane)
         self.assertIn("Stub node", pane)
         self.assertIn("mdi-square", pane)
         self.assertNotIn("mdi-square-outline", pane)
@@ -133,12 +133,16 @@ class LabTopologyGraphTabTestCase(TestCase):
     def test_tab_with_large_yaml_shows_size_text(self):
         store_yaml(self.lab_a, YAML_HEAD + "#" * (GRAPH_YAML_LIMIT + 1 - len(YAML_HEAD)))
 
-        body = self.get_lab_a_body()
+        with mock.patch("containerlab_orchestrator.views.lab_graph", wraps=lab_graph) as read_graph:
+            body = self.get_lab_a_body()
 
+        read_graph.assert_not_called()
         self.assertIn(LARGE_GRAPH_TEXT.format(size=f"{GRAPH_YAML_LIMIT + 1:,} characters"), topology_pane(body))
         self.assert_no_chart(body)
         store_yaml(self.lab_a, YAML_HEAD + "#" * (GRAPH_YAML_LIMIT - len(YAML_HEAD)))
-        pane = topology_pane(self.get_lab_a_body())
+        with mock.patch("containerlab_orchestrator.views.lab_graph", wraps=lab_graph) as read_graph:
+            pane = topology_pane(self.get_lab_a_body())
+        read_graph.assert_called_once()
         self.assertNotIn("The topology YAML has", pane)
         self.assertIn(CHART_ELEMENT, pane)
 
