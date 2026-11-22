@@ -429,20 +429,22 @@ The file `development/docker-compose.clab.yml` adds an optional clab-api-server 
 !!! warning
     The container is privileged, uses the host PID namespace, and has the Docker socket. So it has root control of the Docker host. It can stop or remove any container, and it can read the environment of each container, the Nautobot secret key included. On Docker Desktop it can also read and write the folders that Docker Desktop shares from your computer, for example `/Users`.
 
-    The container uses host networking. Docker Desktop opens port 8090 on all the network interfaces of your computer, so other computers on your network can send a login to the server. If a client asks the server for an SSH session, the server also opens a port from 2223 to 2322 on all interfaces. The app does not ask for SSH sessions.
+    The container uses host networking, so Docker Desktop opens port 8090 on all the network interfaces of your computer. Any computer on your network can reach the server. With the dev password, that computer gets root control of the Docker host. If a client asks the server for an SSH session, the server also opens a port from 2223 to 2322 on all interfaces. The app does not ask for SSH sessions.
 
     Use the container only on a dev computer on a network that you trust. Change the dev password. Stop the container when you do not use it.
 
 To turn on the local server:
 
 1. On Docker Desktop, turn on Settings > Resources > Network > "Enable host networking", then click "Apply & restart". The server must use the network of the Docker host, because containerlab must see the bridges of the lab networks that it makes.
-2. Make sure that `development/creds.env` has these lines. An existing `creds.env` is a copy of an older `creds.example.env`, so it can be without them. Add the missing lines, and change the password.
+2. Make sure that `development/creds.env` has these lines. An existing `creds.env` is a copy of an older `creds.example.env`, so it can be without them. Add the missing lines, and change the password. Use a password without `$`, `#`, quotes, or spaces.
 
     ```shell
     CLAB_DEV_HOST_URL=https://host.docker.internal:8090
     CLAB_DEV_HOST_USERNAME=nautobot
     CLAB_DEV_HOST_PASSWORD=changeme
     ```
+
+    The container does not start with the example password `changeme`. It stops with the message "Change CLAB_DEV_HOST_PASSWORD in development/creds.env. The example value is public." To see the message, run `invoke logs --service clab-api-server`.
 
 3. Add `docker-compose.clab.yml` to `compose_files` in `invoke.yml`. The list replaces the default list, so also give the four default files. `invoke.example.yml` has an example.
 
@@ -521,6 +523,8 @@ The upstream `docker run` method of clab-api-server is for a Linux host. The dev
 - It does not mount `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/gshadow`, or `/home`. On Docker Desktop they would come from macOS, so the container uses its own accounts.
 - It does not mount `/var/run/netns`. The upstream entrypoint makes that folder in the container.
 - It does not mount `/var/lib/docker/containers`. Only the container logs need it, and the app does not read logs.
+- It does not mount `/var/lib/clab-api-server`. The server keeps its restore and `fcling` files there, so a new container does not have them. The app does not use restore or `fcling`.
+- It uses the image tag `v0.10.0` with its digest. The upstream example uses `latest`.
 - It keeps the lab files in `CLAB_LABS_ROOT`, at the same path on the Docker host and in the container, in place of `/home`.
 - It locks the `admin` account of the image and makes a random JWT secret at each start.
 

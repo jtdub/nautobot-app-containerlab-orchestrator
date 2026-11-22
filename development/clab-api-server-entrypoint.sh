@@ -6,6 +6,12 @@ set -eu
 : "${CLAB_DEV_HOST_USERNAME:?Set CLAB_DEV_HOST_USERNAME in development/creds.env.}"
 : "${CLAB_DEV_HOST_PASSWORD:?Set CLAB_DEV_HOST_PASSWORD in development/creds.env.}"
 
+# The server is reachable from the network, so do not start with the public example password.
+if [ "$CLAB_DEV_HOST_PASSWORD" = "changeme" ]; then
+  echo "Change CLAB_DEV_HOST_PASSWORD in development/creds.env. The example value is public." >&2
+  exit 1
+fi
+
 groupadd -f clab_api
 id "$CLAB_DEV_HOST_USERNAME" >/dev/null 2>&1 || useradd -m -G clab_api "$CLAB_DEV_HOST_USERNAME"
 printf '%s:%s\n' "$CLAB_DEV_HOST_USERNAME" "$CLAB_DEV_HOST_PASSWORD" | chpasswd

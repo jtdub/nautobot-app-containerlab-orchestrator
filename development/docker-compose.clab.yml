@@ -6,7 +6,8 @@
 ---
 services:
   clab-api-server:
-    image: "ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0"
+    # The digest is the index of v0.10.0 for linux/amd64 and linux/arm64, so the image cannot change under the tag.
+    image: "ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0@sha256:a3da93c03cc9ed8e99817e55df8db3af3eb727940c37eeb52053754d8823720c"
     # containerlab makes Docker networks and needs their bridges, so the server uses the network of the Docker host.
     network_mode: "host"
     privileged: true
