@@ -1382,5 +1382,29 @@ results and job log entries can read the job log.
 
 ## Screenshots
 
-!!! warning "Developer Note - Remove Me!"
-    Ideally captures every view exposed by the App. Should include a relevant dataset.
+The screenshots show the lab of [Getting Started](app_getting_started.md) on Nautobot 3.2.9, with one more device
+outside the lab. That device gives the stub node `stub-edge1`.
+
+The labs list, under **Containerlab > Labs**:
+
+![The labs list with the lab nbdocs-demo, Deployed](../images/labs-list.png)
+
+The main tab of a Deployed lab, with the job buttons, the Devices panel, and the Nodes table:
+
+![The lab page of nbdocs-demo, with each node running](../images/lab-deployed.png)
+
+The "Topology" tab after Inspect Lab:
+
+![The topology graph, with each node green and the stub node as a square](../images/lab-topology.png)
+
+The "Topology YAML" tab:
+
+![The topology YAML of nbdocs-demo, with the Download YAML button](../images/lab-topology-yaml.png)
+
+A node mapping for a Platform, with its interface table:
+
+![The node mapping of the platform Nokia SR Linux, with two interface rows](../images/node-mapping.png)
+
+A containerlab host:
+
+![The containerlab host local-clab, with Verify SSL off and its Secrets Group](../images/containerlab-host.png)
