@@ -1,0 +1,3 @@
+Added the steps to set up a containerlab host to the install guide.
+Documented the calls that the app makes to clab-api-server.
+Fixed the supported Nautobot versions in the compatibility matrix.
