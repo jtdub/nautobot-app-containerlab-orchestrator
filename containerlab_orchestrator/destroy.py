@@ -31,7 +31,7 @@ NOT_FOUND_WARNING = "Host {host} has no lab named {lab}."
 
 NOT_OWNED_MESSAGE = (
     "Host {host} has a lab named {lab} that another user of the host owns. The job did not destroy it. "
-    "Check the Secrets Group of host {host}."
+    "Check the credentials of host {host}."
 )
 """The error for a destroy call that found a lab of another user of the host."""
 

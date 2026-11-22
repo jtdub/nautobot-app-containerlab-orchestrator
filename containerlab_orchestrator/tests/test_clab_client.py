@@ -10,6 +10,7 @@ import yaml
 from django.test import override_settings
 from nautobot.apps.choices import SecretsGroupSecretTypeChoices
 from nautobot.apps.testing import TestCase
+from nautobot.core.utils.logging import sanitize
 from urllib3.exceptions import NewConnectionError, ProtocolError
 
 from containerlab_orchestrator import clab_client
@@ -133,6 +134,25 @@ class ClabApiClientTestCase(TestCase):  # pylint: disable=too-many-public-method
         self.assertNotIn(SECRET_VALUE, str(error))
         self.assertIsNone(error.__cause__)
         self.assertIsNone(error.__context__)
+        self.send.assert_not_called()
+
+    def test_missing_secret_message_is_not_sanitized(self):
+        cases = (
+            (SecretsGroupSecretTypeChoices.TYPE_USERNAME, {"username": False}),
+            (SecretsGroupSecretTypeChoices.TYPE_PASSWORD, {"password": False}),
+        )
+        for secret_type, missing in cases:
+            with self.subTest(secret_type=secret_type):
+                self.host.secrets_group = create_http_secrets_group(f"no {secret_type}", **missing)
+                with self.assertRaises(ClabApiError) as context:
+                    ClabApiClient(self.host).login()
+                message = context.exception.message
+                expected = (
+                    f"Host {HOST_NAME}: cannot read the HTTP(S) {secret_type}. "
+                    f"Check the credentials of host {HOST_NAME}."
+                )
+                self.assertEqual(message, expected)
+                self.assertEqual(sanitize(message), message)
         self.send.assert_not_called()
 
     def test_first_call_logs_in_before_request(self):

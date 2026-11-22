@@ -18,7 +18,7 @@ from nautobot.extras.models import Job, JobResult, ObjectChange, Status
 
 from containerlab_orchestrator.build import build_lab
 from containerlab_orchestrator.choices import LabStatusChoices
-from containerlab_orchestrator.clab_client import ClabApiClient, ClabApiError
+from containerlab_orchestrator.clab_client import SECRET_READ_MESSAGE, ClabApiClient, ClabApiError
 from containerlab_orchestrator.deploy import NO_TOPOLOGY_MESSAGE, SERVER_TEXT_LIMIT, STATUS_MISSING_MESSAGE
 from containerlab_orchestrator.destroy import NOT_OWNED_NOT_FOUND, PLAIN_NOT_FOUND
 from containerlab_orchestrator.inspection import (
@@ -592,6 +592,7 @@ class SyncServiceTestCase(SyncClientsMixin, TransactionTestCase):
         lab = self.lab_a
         texts = (
             self._line(SYNC_FAILED_LINE, lab, error=INSPECT_500),
+            self._line(SYNC_FAILED_LINE, lab, error=SECRET_READ_MESSAGE.format(host=lab.host, secret_type="password")),
             self._line(SYNC_ERROR_LINE, lab, error_type="OperationalError"),
             self._line(SYNC_HOST_SKIPPED_MESSAGE, lab),
             self._line(SYNC_CHANGED_WARNING, lab),

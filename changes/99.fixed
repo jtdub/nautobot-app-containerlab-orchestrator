@@ -1,0 +1,2 @@
+Fixed the Destroy Lab and Redeploy Lab log, which showed "Secrets (redacted)" when another user of the host owns the lab.
+Fixed the login error in the job log, which showed "username (redacted)" or "password (redacted)" for a missing host credential.

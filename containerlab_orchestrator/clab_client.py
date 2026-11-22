@@ -36,6 +36,9 @@ MAX_CLAB_TIMEOUT = 7200
 LAB_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 """The lab name rule of clab-api-server."""
 
+SECRET_READ_MESSAGE = "Host {host}: cannot read the HTTP(S) {secret_type}. Check the credentials of host {host}."  # noqa: S105
+"""The error for an HTTP(S) secret of the host that the job cannot read."""
+
 
 class ClabApiError(Exception):
     """A clab-api-server call failed.
@@ -158,7 +161,7 @@ class ClabApiClient:
             )
         except (ObjectDoesNotExist, SecretError):
             pass
-        raise ClabApiError(f"Host {self.host}: cannot read the HTTP(S) {secret_type} secret.")
+        raise ClabApiError(SECRET_READ_MESSAGE.format(host=self.host, secret_type=secret_type))
 
     def _auth_headers(self):
         """Return the header that sends the current token."""
