@@ -2,18 +2,14 @@
 
 This document provides a step-by-step tutorial on how to get the App going and how to use it.
 
-The tutorial starts from a Nautobot with no data. At the end, you have deployed, inspected, and destroyed a lab of two
-Nokia SR Linux nodes and one `linux` node. Use a superuser account for each step.
-
-## Install the App
-
-To install the App, please follow the instructions detailed in the [Installation Guide](../admin/install.md).
+The tutorial starts from a Nautobot with no data. It deploys, inspects, and destroys a lab of two Nokia SR Linux nodes
+and one `linux` node. Use a superuser account for each step.
 
 ## First steps with the App
 
 ### Step 1: Install the app
 
-Install the app and add it to `PLUGINS`. See [Install Guide](../admin/install.md#install-guide). The default
+Install the app. Add it to `PLUGINS`. See [Install Guide](../admin/install.md#install-guide). The default
 [App Configuration](../admin/install.md#app-configuration) is correct for this tutorial.
 
 ### Step 2: Add a containerlab host
@@ -33,9 +29,9 @@ Install the app and add it to `PLUGINS`. See [Install Guide](../admin/install.md
 
 ### Step 3: Make a node mapping
 
-1. Go to **Devices > Manufacturers**, and add the manufacturer `Nokia`.
-2. Go to **Devices > Platforms**, and add the platform `Nokia SR Linux` with the manufacturer `Nokia`.
-3. Go to **Containerlab > Node Mappings**, and add a node mapping with these values. See
+1. Go to **Devices > Manufacturers**. Add the manufacturer `Nokia`.
+2. Go to **Devices > Platforms**. Add the platform `Nokia SR Linux` with the manufacturer `Nokia`.
+3. Go to **Containerlab > Node Mappings**. Add a node mapping with these values. See
    [Add a node mapping](app_use_cases.md#add-a-node-mapping) and [Nokia SR Linux](app_use_cases.md#nokia-sr-linux).
 
 | Field or physical name | Value or container name |
@@ -50,7 +46,7 @@ Install the app and add it to `PLUGINS`. See [Install Guide](../admin/install.md
 
 1. Make the objects that a device needs: a Location Type for devices, a Location, a Role for devices, and a Device
    Type of each model.
-2. Make these three devices, each with the status Active, and add the interfaces.
+2. Make these three devices, each with the status Active and with the interfaces of the table.
 
     | Device | Platform | Interfaces |
     | --- | --- | --- |
@@ -86,13 +82,14 @@ The lab page then shows the buttons Build, Deploy, Destroy, and Inspect. See
 ### Step 7: Build the lab
 
 1. On the lab page, click **Build**. The run form of the job opens with the lab selected.
-2. Click **Run Job Now**. Wait until the job result shows that the job completed.
-3. The job log has a warning for `linux1` `eth1`, because the default mapping has no interface table. The node uses
+2. Click **Run Job Now**.
+3. Wait until the job result shows that the job completed.
+4. The job log has a warning for `linux1` `eth1`, because the default mapping has no interface table. The node uses
    `eth1`. See [Fallback names](app_use_cases.md#fallback-names).
-4. Open the lab page. The status is Built.
-5. Open the "Topology YAML" tab. It shows the three nodes, their management addresses from `10.250.250.2`, and the two
+5. Open the lab page. The status is Built.
+6. Open the "Topology YAML" tab. It shows the three nodes, their management addresses from `10.250.250.2`, and the two
    links. See [Review and download the YAML](app_use_cases.md#review-and-download-the-yaml).
-6. Open the "Topology" tab. Each node is grey, "Not inspected". See
+7. Open the "Topology" tab. Each node is grey, "Not inspected". See
    [View the topology graph](app_use_cases.md#view-the-topology-graph).
 
 A device of the lab can have a cable to a device that is not in the lab. The build then adds a stub node for that
@@ -101,18 +98,20 @@ device. See [Stub nodes](app_use_cases.md#stub-nodes).
 ### Step 8: Deploy and inspect the lab
 
 1. On the lab page, click **Deploy**. Keep "Replace a lab that exists on the host" off.
-2. Click **Run Job Now**. Wait until the job completes. The lab status is Deployed.
-3. Click **Inspect**, then **Run Job Now**.
-4. Open the lab page again. In the Nodes table, each node has the state `running`.
-5. Open the "Topology" tab. Each node is green, "Running".
+2. Click **Run Job Now**.
+3. Wait until the job completes. The lab status is Deployed.
+4. Open the lab page. Click **Inspect**. Then click **Run Job Now**.
+5. Open the lab page again. In the Nodes table, each node has the state `running`.
+6. Open the "Topology" tab. Each node is green, "Running".
 
 See [Deploy a lab](app_use_cases.md#deploy-a-lab) and [Inspect a lab](app_use_cases.md#inspect-a-lab).
 
 ### Step 9: Destroy the lab
 
-1. On the lab page, click **Destroy**. Read the WARNING, and confirm it.
-2. Click **Run Job Now**. Wait until the job completes.
-3. Open the lab page. The status is Destroyed, and the nodes have no state.
+1. On the lab page, click **Destroy**. Read the WARNING. Then confirm it.
+2. Click **Run Job Now**.
+3. Wait until the job completes.
+4. Open the lab page. The status is Destroyed, and the nodes have no state.
 
 See [Destroy a lab](app_use_cases.md#destroy-a-lab).
 

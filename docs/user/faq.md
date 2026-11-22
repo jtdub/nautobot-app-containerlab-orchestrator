@@ -8,13 +8,13 @@ administrator turns on each job. See [Who sees a button](app_use_cases.md#who-se
 
 ## Deploy Lab fails with "Host local-clab does not have these images: ..."
 
-The host does not have each image of the topology. The job does not pull images. Pull each image on the host, then
+The host does not have each image of the topology. The job does not pull images. Pull each image on the host. Then
 run the job again. See [Before the deploy](app_use_cases.md#before-the-deploy).
 
 ## Deploy Lab fails with "Host `<host>` already has a lab named `<lab>`, or another operation of the lab runs."
 
-The host gave HTTP 409, and the job did not change the lab. Wait for the other operation, then run the job again. See
-[What a deploy changes](app_use_cases.md#what-a-deploy-changes) before you replace a lab on the host.
+The host gave HTTP 409, and the job did not change the lab. Wait until the other operation ends. Then run the job
+again. Before you replace a lab on the host, read [What a deploy changes](app_use_cases.md#what-a-deploy-changes).
 
 ## The build fails with "Lab `<lab>` changed during the build."
 
