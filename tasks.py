@@ -32,6 +32,9 @@ ORIGINAL_COMPOSE_FILES = [
     "docker-compose.dev.yml",
 ]
 
+CLAB_DEV_HOST_ACCOUNT_VARS = ("CLAB_DEV_HOST_USERNAME", "CLAB_DEV_HOST_PASSWORD")
+"""The creds.env values that docker-compose.clab.yml reads from the compose environment."""
+
 
 def is_truthy(arg):
     """Convert "truthy" strings into Booleans.
@@ -131,6 +134,7 @@ def docker_compose(context, command, **kwargs):
         "COMPOSE_HTTP_TIMEOUT": context.containerlab_orchestrator.compose_http_timeout,
         "NAUTOBOT_VER": context.containerlab_orchestrator.nautobot_ver,
         "PYTHON_VER": context.containerlab_orchestrator.python_ver,
+        **_clab_compose_env(context),
         **kwargs.pop("env", {}),
     }
     compose_command_tokens = [
@@ -164,6 +168,32 @@ def docker_compose(context, command, **kwargs):
     compose_command = " ".join(compose_command_tokens)
 
     return context.run(compose_command, env=build_env, **kwargs)
+
+
+def _clab_compose_env(context):
+    """Return the compose values of docker-compose.clab.yml, or nothing when compose_files does not have the file.
+
+    Compose reads `${...}` only from the shell and the project `.env`, not from `env_file`. So the host account values
+    come from creds.env, and the labs root is an absolute path that is the same on the Docker host.
+    """
+    if not _is_compose_included(context, "clab"):
+        return {}
+    compose_dir = os.path.abspath(context.containerlab_orchestrator.compose_dir)
+    creds = _read_env_file(os.path.join(compose_dir, "creds.env"))
+    clab_env = {name: creds[name] for name in CLAB_DEV_HOST_ACCOUNT_VARS if name in creds}
+    clab_env["CLAB_LABS_ROOT"] = os.path.join(compose_dir, ".clab-labs")
+    return clab_env
+
+
+def _read_env_file(path):
+    """Return the NAME=value pairs of an env file, without comment lines and without the quotes of a value."""
+    values = {}
+    with open(path, encoding="utf-8") as env_file:
+        for line in env_file:
+            name, separator, value = line.strip().partition("=")
+            if separator and not name.startswith("#"):
+                values[name.strip()] = value.strip().strip("'\"")
+    return values
 
 
 @task
