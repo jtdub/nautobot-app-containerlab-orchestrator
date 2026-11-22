@@ -365,11 +365,11 @@ containerlab topology of the lab from these devices.
 
 #### Add a lab
 
-1. Go to **Containerlab > Labs**, and add a lab.
-2. Enter the name, and select the host.
+1. Go to **Containerlab > Labs**. Add a lab.
+2. Enter the name. Select the host.
 3. Select the devices. See [Select the devices](#select-the-devices).
 4. Enter the management subnet, for example `10.250.250.0/24`. See [The management subnet](#the-management-subnet).
-5. Select the default config source. See [Startup configs](#startup-configs).
+5. Select the default config source. See [Startup configs](#startup-configs) and [Golden Config](#golden-config).
 6. Save the lab.
 
 #### The name
@@ -437,9 +437,9 @@ The Build Lab Topology job writes the topology. The "Topology YAML" tab shows it
 
 #### Nodes
 
-The topology has one node for each selected device, and one [stub node](#stub-nodes) for each device at the far end
-of a cable outside the lab. The node mapping of a device gives the node keys. The builder adds only the allowed keys
-of "Overrides". See [Map devices to containerlab nodes](#map-devices-to-containerlab-nodes) and
+The topology has one node for each selected device. It also has one [stub node](#stub-nodes) for each device at the
+far end of a cable outside the lab. The node mapping of a device gives the node keys. The builder adds only the
+allowed keys of "Overrides". See [Map devices to containerlab nodes](#map-devices-to-containerlab-nodes) and
 [Overrides](#overrides).
 
 The node name comes from the device name:
@@ -489,7 +489,8 @@ warning has the form "Device `<device>`, interface `<interface>`: `<text>`".
 A cable from a selected device to a device outside the lab gives a stub node. The stub node stands for the far
 device, so the interface of the selected device gets a link.
 
-- Each far device gets one stub node, with the name `stub-<far device>`. The name rules of the device nodes apply.
+- Each far device gets one stub node, with the name `stub-<far device>`. The builder changes the far device name
+  as for a device node, but it keeps a `_`, `.`, or `-` at the start. The 63 characters include `stub-`.
 - A stub node has the kind `linux` and the image of the `stub_node_image` setting. See
   [App Configuration](../admin/install.md#app-configuration).
 - The stub interfaces are `eth1`, `eth2`, and so on, in the order of the interface names of the far device.
