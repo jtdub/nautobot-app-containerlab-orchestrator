@@ -27,6 +27,7 @@ from containerlab_orchestrator.destroy import (
     DESTROY_BUSY_MESSAGE,
     DESTROY_TIME_LIMIT_MESSAGE,
     NOT_FOUND_WARNING,
+    NOT_OWNED_MESSAGE,
     DestroyTimeLimit,
 )
 from containerlab_orchestrator.inspection import INSPECT_NOT_OWNED_MESSAGE, INSPECT_TIME_LIMIT_MESSAGE
@@ -508,6 +509,15 @@ class DestroyLabJobTestCase(LabJobTestCase):
         busy = DESTROY_BUSY_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
         failures = BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE)
         self.assertEqual(failures, [message, busy])
+        self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
+
+    def test_not_owned_message_is_not_redacted_in_the_job_log(self):
+        self.destroy_fails_with(404, "lab 'lab-a' not found or not owned by user")
+        message = NOT_OWNED_MESSAGE.format(host=self.lab_a.host, lab=self.lab_a)
+        self.assertEqual(sanitize(message), message)
+        job_result = self.run_job("alice")
+        self.assertJobResultStatus(job_result, JobResultStatusChoices.STATUS_FAILURE)
+        self.assertEqual(BuildLabTopologyJobTestCase.messages(job_result, LogLevelChoices.LOG_FAILURE), [message])
         self.assertEqual(self.status_of(), LabStatusChoices.DEPLOYED)
 
     def test_job_log_and_result_hold_no_yaml_or_config_of_the_job(self):
