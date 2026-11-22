@@ -2,9 +2,6 @@
 
 Here you will find detailed instructions on how to **install** and **configure** the App within your Nautobot environment.
 
-!!! warning "Developer Note - Remove Me!"
-    Detailed instructions on installing the App. You will need to update this section based on any additional dependencies or prerequisites.
-
 ## Prerequisites
 
 - The app is compatible with Nautobot 3.1.0 and higher.
@@ -15,8 +12,13 @@ Here you will find detailed instructions on how to **install** and **configure**
 
 ### Access Requirements
 
-!!! warning "Developer Note - Remove Me!"
-    What external systems (if any) it needs access to in order to work.
+- Each Nautobot worker server needs HTTPS or HTTP access to the URL of each containerlab host. The app jobs make all
+  the calls to the hosts, and the jobs run on the workers.
+- The app needs no SSH access. It uses only the clab-api-server REST API of each host.
+- The calls use the `HTTP_PROXIES` setting of Nautobot only. The `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`
+  environment variables have no effect on them.
+
+[External Interactions](../user/external_interactions.md) lists each call.
 
 ## Install Guide
 
@@ -33,6 +35,13 @@ To ensure Containerlab Orchestrator is automatically re-installed during future 
 
 ```shell
 echo containerlab-orchestrator >> local_requirements.txt
+```
+
+To install a version that is not on PyPI, install the app from Git. Give the SHA of a commit, because a branch
+changes. The installed app shows the version `0.1.0a0`, and the package does not include the built docs of the app.
+
+```shell
+pip install "git+https://github.com/jtdub/nautobot-app-containerlab-orchestrator@<commit SHA>"
 ```
 
 To use the Golden Config startup config sources, install the `golden-config` extra. It installs Nautobot Golden
@@ -99,3 +108,147 @@ Use these settings to control the app:
     WARNING: The host lets a clab-api-server superuser remove the lab of each server user. Destroy Lab and Redeploy
     Lab can then remove a lab of another server user. Do not put a clab-api-server superuser in the Secrets Group of
     a host. Inspect Lab fails for a lab of another server user, but it does not stop the other jobs.
+
+## Set up a containerlab host
+
+A containerlab host is a Linux server with Docker that runs clab-api-server. clab-api-server has containerlab built
+in. The commands below install the tested version. The [Compatibility Matrix](compatibility_matrix.md) gives the
+tested versions.
+
+Use one of the two methods below. Each method serves the API on port 8090 with HTTPS.
+
+### Method 1: systemd service
+
+1. Run the installer as root. The installer writes the server binary, the file
+   `/etc/clab-api-server/clab-api-server.env` with a random `JWT_SECRET`, and a systemd service that runs as root.
+   It also makes the groups `clab_api` and `clab_admins`.
+
+    ```shell
+    curl -fsSL https://raw.githubusercontent.com/srl-labs/clab-api-server/v0.10.0/install.sh \
+      | sudo bash -s -- install --version v0.10.0
+    ```
+
+2. In `/etc/clab-api-server/clab-api-server.env`, set `API_SERVER_HOST` to the host name of the URL that Nautobot
+   uses. The server puts this name in its certificate.
+
+    ```shell
+    sudoedit /etc/clab-api-server/clab-api-server.env
+    ```
+
+3. Make a Linux account for the app, and put it in the group `clab_api`. The server signs in with the Linux
+   accounts of the host.
+
+    ```shell
+    sudo useradd -m -G clab_api nautobot
+    sudo passwd nautobot
+    ```
+
+4. Start the service.
+
+    ```shell
+    sudo systemctl enable --now clab-api-server
+    sudo systemctl status clab-api-server
+    ```
+
+After you change the env file, run `sudo systemctl restart clab-api-server`.
+
+### Method 2: container
+
+1. Make the group `clab_api` and a Linux account for the app. The container uses the accounts and the groups of the
+   host. The image does not make the group `clab_api`.
+
+    ```shell
+    sudo groupadd clab_api
+    sudo useradd -m -G clab_api nautobot
+    sudo passwd nautobot
+    ```
+
+2. Start the container. Set `API_SERVER_HOST` to the host name of the URL that Nautobot uses. Set `JWT_SECRET` to a
+   random value, because the image has a public example value.
+
+    ```shell
+    docker run -d \
+      --name clab-api-server \
+      --privileged \
+      --network host \
+      --pid host \
+      -e API_SERVER_HOST=clab01.example.com \
+      -e JWT_SECRET="$(openssl rand -hex 32)" \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v /var/run/netns:/var/run/netns \
+      -v /var/lib/docker/containers:/var/lib/docker/containers \
+      -v /etc/passwd:/etc/passwd:ro \
+      -v /etc/shadow:/etc/shadow:ro \
+      -v /etc/group:/etc/group:ro \
+      -v /etc/gshadow:/etc/gshadow:ro \
+      -v /home:/home \
+      -v /var/lib/clab-api-server:/var/lib/clab-api-server \
+      ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0
+    ```
+
+### The host account
+
+Put the account of the app in `clab_api` only. Do not put it in `clab_admins`. A member of `clab_admins` is a
+clab-api-server superuser. Read the WARNING at the end of [App Configuration](#app-configuration).
+
+### TLS
+
+Both methods use a self-signed certificate that the server makes. The certificate holds only `localhost`,
+`127.0.0.1`, `::1`, the host name of the server, and `API_SERVER_HOST`.
+
+The app has no setting for a CA file. Each host has the "Verify SSL" setting only. The `REQUESTS_CA_BUNDLE` and
+`CURL_CA_BUNDLE` environment variables have no effect on the app. Use one of these two choices:
+
+- Use a certificate from a CA that the `certifi` CA bundle of the Python environment of Nautobot trusts. The
+  certificate must hold the host name of the URL. Set `TLS_CERT_FILE` and `TLS_KEY_FILE` to the certificate file
+  and the key file. Keep "Verify SSL" on. The CA store of the operating system does not apply to the app.
+- Use the self-signed certificate, and turn "Verify SSL" off for the host.
+
+!!! warning ""
+    WARNING: With "Verify SSL" off, the app sends the password of the host account over TLS, but it does not check
+    the certificate of the server. A system that sits between Nautobot and the host can read the password. Turn
+    "Verify SSL" off only on a network that you trust.
+
+## Add a host in Nautobot
+
+### Permissions
+
+A user needs these permissions to add a host:
+
+| Task | Permissions |
+| --- | --- |
+| Add a Secret | `extras.add_secret` |
+| Add a Secrets Group with its Secrets | `extras.add_secretsgroup`, `extras.view_secret` |
+| See the hosts | `containerlab_orchestrator.view_containerlabhost` |
+| Add a host | `containerlab_orchestrator.add_containerlabhost`, `extras.view_secretsgroup` |
+| Change a host | `containerlab_orchestrator.change_containerlabhost`, `extras.view_secretsgroup` |
+| Delete a host | `containerlab_orchestrator.delete_containerlabhost` |
+
+### Steps
+
+1. Go to **Secrets > Secrets**. Add a Secret for the username of the host account, and a Secret for its password.
+   Use a secrets provider that your Nautobot has.
+2. Go to **Secrets > Secrets Groups**, and add a Secrets Group.
+3. In the group, add the username Secret with the access type "HTTP(S)" and the secret type "Username".
+4. Add the password Secret with the access type "HTTP(S)" and the secret type "Password".
+5. Go to **Containerlab > Containerlab Hosts**, and add a host.
+6. Set the URL to the address of the server, with the port 8090, for example `https://clab01.example.com:8090`.
+7. Set "Verify SSL" as the [TLS](#tls) section tells you.
+8. In "Secrets group", select the Secrets Group. Save the host.
+
+The URL must start with `http://` or `https://`. It must not hold a username or a password. The form shows "The
+Secrets Group must have an HTTP(S) username secret and an HTTP(S) password secret." when the group does not have
+both Secrets.
+
+### Check the login
+
+Run this command on each Nautobot worker server. Use the URL, the username, and the password of the host. Add `-k`
+only when "Verify SSL" is off.
+
+```shell
+curl -X POST https://clab01.example.com:8090/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "nautobot", "password": "<password>"}'
+```
+
+The result is JSON with a `token` key. The jobs use the same login.
