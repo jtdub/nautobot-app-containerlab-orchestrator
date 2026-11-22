@@ -161,6 +161,197 @@ result until it starts. When the job runs, it checks the status of the lab and t
 
 ## Use-cases and common workflows
 
+### Map devices to containerlab nodes
+
+A node mapping tells the topology builder how to make a containerlab node from a device. It gives the containerlab
+kind, the image, and the other node settings. Its interface table gives the container name of each physical
+interface.
+
+#### How the builder selects a mapping
+
+For each device of a lab, the builder uses the first mapping that matches, in this order:
+
+1. The mapping of the Device Type of the device.
+2. The mapping of the Platform of the device.
+3. The default mapping.
+
+A mapping is for one Device Type or for one Platform, not for both. A Device Type or a Platform has at most one
+mapping. Use a Device Type mapping when one model needs other settings than the other devices of its Platform.
+
+#### The default mapping
+
+The `default_node_mapping` setting gives the default mapping. See
+[App Configuration](../admin/install.md#app-configuration). The default value is the kind `linux` with the image
+`alpine:latest`. The setting must have a `kind` and an `image`, and no other key. The default mapping has no
+interface table and no config source. So the default config source of the lab applies. See
+[Startup configs](#startup-configs).
+
+The builder reads the setting only for a device that no mapping matches. If the setting is not valid, the build
+fails with one of these messages:
+
+- "The default_node_mapping setting must be a dict with a kind and an image."
+- "The default_node_mapping setting is not valid: `<key>`: `<message>`"
+- "The default_node_mapping setting has an unknown key: `<keys>`."
+
+#### Add a node mapping
+
+1. Go to **Containerlab > Node Mappings**. Add a node mapping.
+2. Select a Device type or a Platform.
+3. Enter the kind and the image. Set the other fields only when the node needs them.
+4. In "Interface Mappings", add one row for each cabled interface. Use "Add another interface" for each new row.
+5. Save the mapping.
+
+A mapping with no target, or with two targets, does not save. The form shows "Set a Device Type or a Platform." or
+"Set a Device Type or a Platform, but not both."
+
+| Field | Rules |
+| --- | --- |
+| Kind | The containerlab kind, for example `ceos`. Use lowercase letters, digits, `_`, and `-`. Start with a letter. The app does not check that containerlab has the kind. |
+| Image | The container image, with no space. The host must have the image before the deploy. See [Before the deploy](#before-the-deploy). |
+| Type | The containerlab node type, if the kind needs one. Leave it empty for the default type of the kind. |
+| Environment variables | A JSON object of strings, for example `{"INTFTYPE": "et"}`. The values are not secret. The REST API, GraphQL, the change log, and webhooks show them. |
+| CPU | The number of CPUs, 0.01 or more, with two decimal places at most. |
+| Memory | A number and a unit, for example `512mb` or `1Gb`. |
+| Overrides | A JSON object of other containerlab node keys. See [Overrides](#overrides). |
+| Config source, Config template | The startup config of the node. See [Startup configs](#startup-configs). |
+
+The builder drops each value that holds `$` or `{{`, and it gives a warning. containerlab would replace such a value
+with data from the host before it reads the topology. The builder also drops the env entry `__IMPORT_ENVS`. A kind
+that holds `$` or `{{` makes the build fail.
+
+#### Overrides
+
+The builder merges these keys of "Overrides" into the node. A dict merges into a dict at each level.
+
+`image`, `type`, `env`, `cpu`, `memory`, `cpu-set`, `shm-size`, `labels`, `image-pull-policy`, `startup-delay`
+
+The builder drops each other key, and it gives the warning "Mapping `<mapping>`: the overrides keys `<keys>` are
+not allowed. The builder dropped them." So `binds`, `exec`, `kind`, `mgmt-ipv4`, and `startup-config` have no effect.
+
+!!! warning
+    Some containerlab keys, for example `binds` and `exec`, run on the containerlab host. The builder drops them, but
+    a user who can change a mapping changes the nodes of each lab that uses it. Give the add and change permissions
+    on node mappings only to users that you trust.
+
+#### The interface table
+
+Each row of the interface table has a physical name and a container name:
+
+- "Physical name" is the name of the interface in Nautobot, for example `GigabitEthernet0/0/0/0`. The match is exact
+  and case-sensitive.
+- "Container name" is the name that containerlab uses in the link, for example `Gi0-0-0-0`. It must have no space.
+
+Two rows of one mapping cannot have the same physical name or the same container name. The form then shows "Fix
+the errors in the interface rows.", and the rows show "Please correct the duplicate values below.". Names that differ
+only in case or accent can also give "Two interface rows have the same name. Names that differ only in case or
+accent count as the same name."
+
+The builder uses the table for the cabled interfaces of each device. To rename the interfaces in a Golden Config
+text, the builder uses the same rows. See [Interface rename](#interface-rename).
+
+On the mapping page, the "Interface Mappings" panel shows the rows. Click "Edit interfaces" to change them.
+
+#### Fallback names
+
+A cabled interface with no row gets the next free `eth<N>` name, from `eth1`. The builder skips each name that the
+table already uses. The build gives a warning for each such interface:
+
+"Device `<device>`, interface `<interface>`: the interface table has no row. The `<kind>` node uses `<name>`.
+Mapping: `<mapping>`."
+
+The fallback names follow the order of the interface names, not the port numbers. So when only `Ethernet3` has a
+cable, it gets `eth1`. A device of the default mapping gets fallback names for each cabled interface.
+
+The fallback names work only for kinds that accept `eth<N>`, for example `linux`, `ceos`, and `cisco_iol`. For
+`cisco_xrd` and `nokia_srlinux`, add a row for each cabled interface, or the deploy fails.
+
+If two interfaces of one device have the same name, the second one gets no container name and a warning.
+
+#### The Node Mappings panel
+
+The Device Type page and the Platform page have a "Node Mappings" panel. It shows the mapping of that Device Type or
+that Platform. An empty panel means that no mapping is for that object, or that you cannot view node mappings.
+
+#### Permissions
+
+| Task | Permissions |
+| --- | --- |
+| See the node mappings and the Node Mappings panel | `containerlab_orchestrator.view_nodemapping` |
+| See the interface table of a mapping | `containerlab_orchestrator.view_interfacemapping` |
+| Add a mapping | `containerlab_orchestrator.add_nodemapping`, `dcim.view_devicetype`, `dcim.view_platform` |
+| Change a mapping and its interface table | `containerlab_orchestrator.change_nodemapping`, `dcim.view_devicetype`, `dcim.view_platform` |
+| Delete a mapping and its interface table | `containerlab_orchestrator.delete_nodemapping` |
+
+The form saves the interface rows with the permissions of the node mapping. The rows need no add, change, or delete
+permission of their own.
+
+#### Examples
+
+Each example is one mapping, for the Platform of the devices. The first rows give the fields. The other rows give
+the interface table. The Cisco and Arista images are not public. Get each image from the vendor. For IOL, build the
+image from the IOL binary with vrnetlab. Load each image on each host.
+
+##### Cisco IOS XR
+
+| Field or physical name | Value or container name |
+| --- | --- |
+| Kind | `cisco_xrd` |
+| Image | `xrd-control-plane:<version>` |
+| `GigabitEthernet0/0/0/0` | `Gi0-0-0-0` |
+| `GigabitEthernet0/0/0/1` | `Gi0-0-0-1` |
+| `GigabitEthernet0/0/0/2` | `Gi0-0-0-2` |
+
+XRd accepts only `Gi0-0-0-<N>` names in a link. In the node, `Gi0-0-0-0` is `GigabitEthernet0/0/0/0`. The kinds
+`xrd` and `cisco_xrd` are the same kind. A Golden Config source puts `Gi0-0-0-<N>` names in the config, and XR does
+not accept them. For XRd, use a Jinja2 template that writes the physical names of the device.
+
+##### Cisco IOS
+
+| Field or physical name | Value or container name |
+| --- | --- |
+| Kind | `cisco_iol` |
+| Image | `vrnetlab/cisco_iol:17.12.01` |
+| `Ethernet0/1` | `Ethernet0/1` |
+| `Ethernet0/2` | `Ethernet0/2` |
+| `Ethernet0/3` | `Ethernet0/3` |
+| `Ethernet1/0` | `Ethernet1/0` |
+
+IOL accepts `Ethernet<slot>/<port>`, `e<slot>/<port>`, or `eth<N>`, with a slot from 0 to 9 and a port from 0 to 3.
+`Ethernet0/0` is the management interface. A row for `Ethernet0/0` fails the deploy. Mark `Ethernet0/0` as
+management only in Nautobot, so that the builder skips its cable. containerlab uses the same port for `Ethernet0/1`
+and `eth1`. So do not mix rows and fallback names on one IOL node.
+
+##### Arista EOS
+
+| Field or physical name | Value or container name |
+| --- | --- |
+| Kind | `ceos` |
+| Image | `ceos:4.37.0F` |
+| `Ethernet1` | `eth1` |
+| `Ethernet2` | `eth2` |
+| `Ethernet3` | `eth3` |
+
+cEOS accepts `eth<N>` names in a link. In the node, `eth1` is `Ethernet1`. For a breakout port, use `_`: `eth1_1` is
+`Ethernet1/1`. To use `et<N>` names, set the environment variable `INTFTYPE` to `et`. The kinds `ceos` and
+`arista_ceos` are the same kind.
+
+cEOS has no `Ethernet<N>` alias. Do not use `Ethernet1` as a container name. The `EosIntfMapping.json` file of
+containerlab needs `binds`, which the builder drops. Use the interface table.
+
+##### Nokia SR Linux
+
+| Field or physical name | Value or container name |
+| --- | --- |
+| Kind | `nokia_srlinux` |
+| Image | `ghcr.io/nokia/srlinux:<version>` |
+| `ethernet-1/1` | `ethernet-1/1` |
+| `ethernet-1/2` | `ethernet-1/2` |
+| `ethernet-1/3` | `ethernet-1/3` |
+
+SR Linux accepts `ethernet-<L>/<P>` and `e<L>-<P>` names in a link. `ethernet-1/1` and `e1-1` are the same port. For
+a breakout port, use `ethernet-<L>/<P>/<C>` or `e<L>-<P>-<C>`. The kinds `srl` and `nokia_srlinux` are the same
+kind. The image is public, but the host must have it before the deploy.
+
 ### Build a lab
 
 The Build Lab Topology job builds the containerlab topology of a lab from Nautobot data. It stores the topology YAML,
@@ -968,8 +1159,8 @@ the interface table of the node mapping to the `container_name` of the row. Thes
   text becomes `eth1-Gi0/4`. Write each interface on its own line in the Golden Config text.
 
 The node OS must accept the new name. containerlab v0.56.0 and later accept the interface alias of the kind as a
-link name, for example `Ethernet1` for `ceos`. Put that alias in the `container_name` column, so the config gets a
-name that the node OS uses.
+link name, for example `Ethernet0/1` for `cisco_iol`. Put that alias in the `container_name` column, so the config
+gets a name that the node OS uses. Some kinds, for example `ceos`, have no alias. See the [examples](#examples).
 
 The Jinja2 source does not rename. A template uses `interface_map` directly.
 
