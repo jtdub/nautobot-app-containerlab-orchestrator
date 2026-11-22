@@ -4,7 +4,22 @@ Here you will find any steps necessary to upgrade the App in your Nautobot envir
 
 ## Upgrade Guide
 
-!!! warning "Developer Note - Remove Me!"
-    Add more detailed steps on how the app is upgraded in an existing Nautobot setup and any version specifics (such as upgrading between major versions with breaking changes).
+1. Read the [release notes](release_notes/index.md) of each version after your version.
+2. Upgrade the package. For a Git install, use the `pip install` command of the [Install Guide](install.md#install-guide)
+   with the SHA of the new commit.
 
-When a new release comes out it may be necessary to run a migration of the database to account for any changes in the data models used by this app. Execute the command `nautobot-server post-upgrade` within the runtime environment of your Nautobot installation after updating the `containerlab-orchestrator` package via `pip`.
+    ```shell
+    pip install --upgrade containerlab-orchestrator
+    ```
+
+3. Run the migrations and clear the cache.
+
+    ```shell
+    nautobot-server post_upgrade
+    ```
+
+4. Restart the Nautobot, worker, and scheduler services.
+
+    ```shell
+    sudo systemctl restart nautobot nautobot-worker nautobot-scheduler
+    ```
