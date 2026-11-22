@@ -7,26 +7,31 @@ This document provides an overview of the App including critical information and
 
 ## Description
 
-![Main Page](../media/ss_main_page_light.png#only-light)
-![Main Page](../media/ss_main_page_dark.png#only-dark)
+Containerlab Orchestrator makes containerlab labs from the devices and cables in Nautobot. It builds a containerlab
+topology from the devices of a lab, and stores the topology on the lab. Then it deploys the lab to a containerlab
+host, reads the state of each node, and destroys the lab.
+
+The app talks to each host only through the clab-api-server REST API. It needs no SSH access.
 
 ## Audience (User Personas) - Who should use this App?
 
-!!! warning "Developer Note - Remove Me!"
-    Who is this meant for/ who is the common user of this app?
+- A Nautobot administrator installs the app, sets up the containerlab hosts, and adds them in Nautobot. See the
+  [Installation Guide](../admin/install.md).
+- A network engineer adds node mappings and labs. Then the engineer builds, deploys, inspects, and destroys the labs.
+  See [Getting Started](app_getting_started.md) and [Using the App](app_use_cases.md).
 
 ## Authors and Maintainers
 
-!!! warning "Developer Note - Remove Me!"
-    Add the team and/or the main individuals maintaining this project. Include historical maintainers as well.
+- `jtdub`
 
 ## Nautobot Features Used
 
-!!! warning "Developer Note - Remove Me!"
-    What is shown today in the Installed Apps page in Nautobot. What parts of Nautobot does it interact with, what does it add etc. ?
-
-### Extras
-
-!!! warning "Developer Note - Remove Me!"
-    Custom Fields - things like which CFs are created by this app?
-    Jobs - are jobs, if so, which ones, installed by this app?
+- Models: containerlab hosts, node mappings, interface mappings, labs, and lab nodes.
+- Statuses: a lab has the status Planned, Built, Deployed, Failed, or Destroyed.
+- Jobs: Build Lab Topology, Deploy Lab, Redeploy Lab, Destroy Lab, Inspect Lab, and Sync Labs. Nautobot adds each
+  job turned off.
+- Navigation: the **Containerlab** menu, with Labs, Containerlab Hosts, and Node Mappings.
+- The lab page: a button for each lab job, the Devices panel, the Nodes table, and the Topology and Topology YAML tabs.
+- Panels: a Node Mappings panel on the Device Type page and on the Platform page.
+- REST API and GraphQL: each model of the app. See [External Interactions](external_interactions.md).
+- Secrets: each host gets the username and the password of its host account from a Secrets Group.
