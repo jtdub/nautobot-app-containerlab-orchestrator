@@ -6,7 +6,7 @@ Nautobot adds each job of the app turned off, and the lab page shows a button on
 administrator turns on each job. See [Who sees a button](app_use_cases.md#who-sees-a-button) and "Turn on the job" of
 [Build a lab](app_use_cases.md#turn-on-the-job).
 
-## Deploy Lab fails with "Host local-clab does not have these images: ..."
+## Deploy Lab fails with "Host `<host>` does not have these images: `<images>`."
 
 The host does not have each image of the topology. The job does not pull images. Pull each image on the host. Then
 run the job again. See [Before the deploy](app_use_cases.md#before-the-deploy).

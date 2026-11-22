@@ -31,8 +31,10 @@ Install the app. Add it to `PLUGINS`. See [Install Guide](../admin/install.md#in
 
 1. Go to **Devices > Manufacturers**. Add the manufacturer `Nokia`.
 2. Go to **Devices > Platforms**. Add the platform `Nokia SR Linux` with the manufacturer `Nokia`.
-3. Go to **Containerlab > Node Mappings**. Add a node mapping with these values. See
+3. Go to **Containerlab > Node Mappings**. Add a node mapping with the values of the table below. See
    [Add a node mapping](app_use_cases.md#add-a-node-mapping) and [Nokia SR Linux](app_use_cases.md#nokia-sr-linux).
+4. Put the two interface rows in "Interface Mappings". Click "Add another interface" for the second row.
+5. Click **Create**.
 
 | Field or physical name | Value or container name |
 | --- | --- |
@@ -44,18 +46,20 @@ Install the app. Add it to `PLUGINS`. See [Install Guide](../admin/install.md#in
 
 ### Step 4: Make the devices and the cables
 
-1. Make the objects that a device needs: a Location Type for devices, a Location, a Role for devices, and a Device
-   Type of each model.
-2. Make these three devices, each with the status Active and with the interfaces of the table.
+1. Make the objects that a device needs: a Location Type for devices, a Location, and a Role for devices.
+2. Add the manufacturer `Generic`.
+3. Add the Device Type `7220 IXR-D2L` with the manufacturer `Nokia`.
+4. Add the Device Type `Linux server` with the manufacturer `Generic`.
+5. Make these three devices, each with the status Active and with the interfaces of the table.
 
-    | Device | Platform | Interfaces |
-    | --- | --- | --- |
-    | `srl1` | `Nokia SR Linux` | `ethernet-1/1`, `ethernet-1/2` |
-    | `srl2` | `Nokia SR Linux` | `ethernet-1/1`, `ethernet-1/2` |
-    | `linux1` | (none) | `eth1` |
+    | Device | Device Type | Platform | Interfaces |
+    | --- | --- | --- | --- |
+    | `srl1` | `7220 IXR-D2L` | `Nokia SR Linux` | `ethernet-1/1`, `ethernet-1/2` |
+    | `srl2` | `7220 IXR-D2L` | `Nokia SR Linux` | `ethernet-1/1`, `ethernet-1/2` |
+    | `linux1` | `Linux server` | (none) | `eth1` |
 
-3. Connect `srl1` `ethernet-1/1` to `srl2` `ethernet-1/1` with a cable.
-4. Connect `srl1` `ethernet-1/2` to `linux1` `eth1` with a cable.
+6. Connect `srl1` `ethernet-1/1` to `srl2` `ethernet-1/1` with a cable.
+7. Connect `srl1` `ethernet-1/2` to `linux1` `eth1` with a cable.
 
 `linux1` has no platform, so no node mapping matches it. The builder uses the
 [default mapping](app_use_cases.md#the-default-mapping), the kind `linux` with the image `alpine:latest`.
@@ -66,7 +70,7 @@ Install the app. Add it to `PLUGINS`. See [Install Guide](../admin/install.md#in
 2. Enter the name `nbdocs-demo`. Select the host `local-clab`.
 3. In "Devices", select `srl1`, `srl2`, and `linux1`.
 4. Enter the management subnet `10.250.250.0/24`. Use a subnet that no network on the host uses.
-5. Save the lab.
+5. Click **Create**.
 
 The lab page shows you as the owner, and the status Planned. See [Make a lab](app_use_cases.md#make-a-lab).
 
