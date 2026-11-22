@@ -161,6 +161,12 @@ result until it starts. When the job runs, it checks the status of the lab and t
 
 ## Use-cases and common workflows
 
+### Add a containerlab host
+
+A lab runs on one containerlab host, a server that runs clab-api-server. An administrator sets up the host and adds
+it in Nautobot. See [Set up a containerlab host](../admin/install.md#set-up-a-containerlab-host) and
+[Add a host in Nautobot](../admin/install.md#add-a-host-in-nautobot).
+
 ### Map devices to containerlab nodes
 
 A node mapping tells the topology builder how to make a containerlab node from a device. It gives the containerlab
@@ -351,6 +357,157 @@ containerlab needs `binds`, which the builder drops. Use the interface table.
 SR Linux accepts `ethernet-<L>/<P>` and `e<L>-<P>` names in a link. `ethernet-1/1` and `e1-1` are the same port. For
 a breakout port, use `ethernet-<L>/<P>/<C>` or `e<L>-<P>-<C>`. The kinds `srl` and `nokia_srlinux` are the same
 kind. The image is public, but the host must have it before the deploy.
+
+### Make a lab
+
+A lab is a set of devices on one containerlab host, with a management subnet. The Build Lab Topology job makes the
+containerlab topology of the lab from these devices.
+
+#### Add a lab
+
+1. Go to **Containerlab > Labs**, and add a lab.
+2. Enter the name, and select the host.
+3. Select the devices. See [Select the devices](#select-the-devices).
+4. Enter the management subnet, for example `10.250.250.0/24`. See [The management subnet](#the-management-subnet).
+5. Select the default config source. See [Startup configs](#startup-configs).
+6. Save the lab.
+
+#### The name
+
+| Rule | Message |
+| --- | --- |
+| The name has 1 to 128 letters, digits, `_`, or `-`. | "Use 1 to 128 letters, digits, "_", or "-"." |
+| Two labs on one host cannot have the same name. The check ignores case, so `DC1` and `dc1` are the same name. | "A lab with this name already exists on this host." |
+| The name starts with a letter or a digit. The form accepts a name that starts with `_` or `-`, but the build fails. | "Start the lab name with a letter or a digit, so that containerlab accepts it." |
+
+Two labs on different hosts can have the same name.
+
+#### The owner and the status
+
+When you save a new lab, Nautobot makes you the owner of the lab, and gives it the Planned status. The form has no
+owner field and no status field. The lab jobs change the status. Only the owner or a superuser can build the lab. See
+[Who can build a lab](#who-can-build-a-lab).
+
+If labs cannot have the Planned status, the new lab does not save. The form shows "The Planned status is not
+available for labs. Ask an administrator to add it."
+
+#### Select the devices
+
+A lab has three device sources. The build uses each device that one or more sources select. So the sources add up,
+and a device that two sources select gives one node.
+
+| Field | Rules |
+| --- | --- |
+| Devices | Select each device. |
+| Dynamic Group | Select a Dynamic Group of devices. The form lists only the groups of devices. |
+| Device filter | A JSON object of Device filter fields and values, for example `{"role": ["leaf"]}`. |
+
+The build reads the Dynamic Group and the device filter again at each build. So a device that joins the group or
+matches the filter after the save is in the next build.
+
+The form rejects a device filter with an unknown field or a bad value. Each message starts with the filter field,
+for example "`<field>`: Unknown filter field.". The build fails with one of these messages:
+
+- "`<group>`: This group selects all devices." For example, a group with no filter selects all devices.
+- "The device filter, the Dynamic Group, and the devices of lab `<lab>` select no device."
+- "You cannot view `<count>` of the devices that lab `<lab>` selects."
+
+#### The Devices panel
+
+The lab page has a "Devices" panel. It shows only the devices of the "Devices" field. It does not show the devices of
+the Dynamic Group or of the device filter. After a build, the "Nodes" table shows each node of the topology.
+
+#### The management subnet
+
+The management subnet is the IPv4 network of the management interface of each node.
+
+- Use a unicast network from /8 to /30, with no host bits.
+- The gateway gets the first address after the network address, for example `10.250.250.1`.
+- The nodes get the next addresses, from `10.250.250.2`.
+- The subnet has room for its number of addresses minus 3. So a /24 has room for 253 nodes, and a /30 for 1 node.
+
+When you change the subnet of a lab after a build, the form counts the node rows of the last build. If the new subnet
+has no room for them, the form shows "Node addresses in the subnet: `<room>`. Nodes in the lab: `<count>`. Use a
+larger subnet."
+
+### What the topology holds
+
+The Build Lab Topology job writes the topology. The "Topology YAML" tab shows it. See
+[Review and download the YAML](#review-and-download-the-yaml).
+
+#### Nodes
+
+The topology has one node for each selected device, and one [stub node](#stub-nodes) for each device at the far end
+of a cable outside the lab. The node mapping of a device gives the node keys. The builder adds only the allowed keys
+of "Overrides". See [Map devices to containerlab nodes](#map-devices-to-containerlab-nodes) and
+[Overrides](#overrides).
+
+The node name comes from the device name:
+
+- Each run of characters that are not letters, digits, `_`, `.`, or `-` becomes one `-`. So `leaf 1/a` becomes
+  `leaf-1-a`.
+- The builder removes each `_`, `.`, and `-` at the start of the name.
+- The builder cuts the name to 63 characters.
+- A device with no letter or digit in its name gets `device-<id>`. `<id>` is the first 8 characters of the device ID.
+- Two devices can give one name, for example `leaf 1` and `LEAF/1`, because the check ignores case. The builder
+  puts the devices in order of name. The first device keeps the name. Each other device gets the next free suffix,
+  `-2`, `-3`, and so on.
+
+#### Management addresses
+
+The management network of the topology has the name `clab-<lab>` and the subnet of the lab. Each node gets one
+address, from `.2`. The order is the device nodes in order of the device name, then the stub nodes. So a new device
+can change the address of other nodes at the next build.
+
+If the subnet has no address for each node, the build fails with "Node addresses in the subnet: `<room>`. Nodes in
+the topology: `<count>`. Use a larger subnet." The count includes the stub nodes.
+
+#### Links
+
+The topology has one link for each cable between two selected devices. Each end of the link is
+`<node>:<container name>`. The container name comes from the interface table of the node mapping, or it is a fallback
+name. See [The interface table](#the-interface-table) and [Fallback names](#fallback-names).
+
+#### Skipped cables
+
+The builder skips some cables, and gives one warning for each skipped cable. The job log shows the warnings. Each
+warning has the form "Device `<device>`, interface `<interface>`: `<text>`".
+
+| Cause | Text |
+| --- | --- |
+| One end of the cable is management only. | "the cable is on a management-only interface. The builder skipped it." |
+| The cable has no far end. | "the cable has no far end. The builder skipped it." |
+| The cable has more than one far end, for example a breakout cable. | "the cable has more than one far end. The builder skipped it." |
+| The far end is not an interface, for example a front port or a circuit termination. | "the cable goes to a `<type>`, not to an interface. The builder skipped it." |
+| The far interface is on a module that is in no module bay. | "the cable goes to an interface with no device. The builder skipped it." |
+| The far device is outside the lab, and you cannot view it. | "the cable goes to a device that you cannot view. The builder skipped it." |
+| The interface has no container name, for example a second interface with the same name. | "the interface has no container name. The builder skipped its cable." |
+| The container name has `$` or `{{`. | "the container name has a $ variable or a Go template action, which containerlab replaces before it reads the topology. The builder skipped its cable." |
+
+#### Stub nodes
+
+A cable from a selected device to a device outside the lab gives a stub node. The stub node stands for the far
+device, so the interface of the selected device gets a link.
+
+- Each far device gets one stub node, with the name `stub-<far device>`. The name rules of the device nodes apply.
+- A stub node has the kind `linux` and the image of the `stub_node_image` setting. See
+  [App Configuration](../admin/install.md#app-configuration).
+- The stub interfaces are `eth1`, `eth2`, and so on, in the order of the interface names of the far device.
+- In the "Nodes" table, a stub node has no device, and the "Stub" column shows it.
+
+To make the far device a full node, add it to the lab. If the `stub_node_image` setting is not valid, a build with a
+stub node fails with "The stub_node_image setting is not valid: `<reason>`".
+
+#### The device limit
+
+The `max_lab_devices` setting limits the number of devices that a lab selects. See
+[App Configuration](../admin/install.md#app-configuration). A build of a lab with more devices fails with "Lab
+`<lab>` selects `<count>` devices. The max_lab_devices setting allows `<limit>`. Select fewer devices, or ask an
+administrator to raise the limit."
+
+The stub nodes do not count for the limit, but each stub node needs an address. So a lab inside the limit can still
+fail with the "Nodes in the topology" message. If the setting is not valid, each build fails with "The
+max_lab_devices setting must be an integer of 1 or more."
 
 ### Build a lab
 
@@ -1175,8 +1332,11 @@ more, and each `{{` becomes ``{{`{{`}}`` or more. Do not edit the escaped text b
 |---|---|---|
 | `cisco_vios`, `arrcus_arcos`, `6wind_vsr` | `$$` | 1 |
 | `cisco_iol` | `$$` | 2 |
-| `nokia_srlinux` and `srl` with a CLI config, and each other kind | `$$$$` | 2 |
+| `nokia_srlinux` and `srl` with a CLI config, and each other kind that reads a startup config | `$$$$` | 2 |
 | `nokia_srlinux` and `srl` with a JSON config, `nokia_srsim` | `$$$$$$$$` | 3 |
+
+Some kinds, for example `linux` and `sonic-vs`, do not read a startup config. The node of such a kind does not get
+the text.
 
 The builder adds a final newline to each config. So containerlab always reads the text as a config, and never as a
 path on the host or a URL.
@@ -1187,7 +1347,8 @@ The builder does not escape these names.
 #### Full and partial configs
 
 For most kinds, the startup config replaces the default config of the kind. The kinds `cisco_iol`, `cisco_vios`,
-`nokia_srsim`, `nokia_sros`, and `ciena_saos` read the text as a partial config. containerlab adds a partial config
+`nokia_srsim`, `nokia_sros`, `ciena_saos`, and `6wind_vsr` read the text as a partial config. `nokia_srlinux` and
+`srl` also read a CLI config as a partial config. containerlab adds a partial config
 to the default config of the kind.
 
 #### Redeploy
