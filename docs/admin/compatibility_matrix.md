@@ -8,5 +8,5 @@ Containerlab Orchestrator supports Python 3.11 to 3.14.
 
 ## Tested containerlab host
 
-The app is tested with clab-api-server v0.10.0 and the containerlab v0.83.0 that is built into it. The steps in
+The tests of the app use clab-api-server v0.10.0. This server has containerlab v0.83.0 built in. The steps in
 [Set up a containerlab host](install.md#set-up-a-containerlab-host) install this version.

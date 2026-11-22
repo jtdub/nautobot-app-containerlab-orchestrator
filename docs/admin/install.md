@@ -197,17 +197,22 @@ Both methods use a self-signed certificate that the server makes. The certificat
 `127.0.0.1`, `::1`, the host name of the server, and `API_SERVER_HOST`.
 
 The app has no setting for a CA file. Each host has the "Verify SSL" setting only. The `REQUESTS_CA_BUNDLE` and
-`CURL_CA_BUNDLE` environment variables have no effect on the app. Use one of these two choices:
+`CURL_CA_BUNDLE` environment variables have no effect on the app.
+
+!!! warning ""
+    WARNING: With "Verify SSL" off, the app sends the password of the host account over TLS, but it does not check
+    the certificate of the server. A system that sits between Nautobot and the host can read the password. Turn
+    "Verify SSL" off only on a network that you trust.
+
+Use one of these two choices:
 
 - Use a certificate from a CA that the `certifi` CA bundle of the Python environment of Nautobot trusts. The
   certificate must hold the host name of the URL. Set `TLS_CERT_FILE` and `TLS_KEY_FILE` to the certificate file
   and the key file. Keep "Verify SSL" on. The CA store of the operating system does not apply to the app.
 - Use the self-signed certificate, and turn "Verify SSL" off for the host.
 
-!!! warning ""
-    WARNING: With "Verify SSL" off, the app sends the password of the host account over TLS, but it does not check
-    the certificate of the server. A system that sits between Nautobot and the host can read the password. Turn
-    "Verify SSL" off only on a network that you trust.
+For Method 2, mount the folder of the certificate into the container. Then add `-e TLS_CERT_FILE=<path>` and
+`-e TLS_KEY_FILE=<path>` to the `docker run` command. The server does not start when it cannot find a file.
 
 ## Add a host in Nautobot
 
@@ -236,9 +241,12 @@ A user needs these permissions to add a host:
 7. Set "Verify SSL" as the [TLS](#tls) section tells you.
 8. In "Secrets group", select the Secrets Group. Save the host.
 
-The URL must start with `http://` or `https://`. It must not hold a username or a password. The form shows "The
-Secrets Group must have an HTTP(S) username secret and an HTTP(S) password secret." when the group does not have
-both Secrets.
+The URL must start with `http://` or `https://`. It must not hold a username or a password. When the group does not
+have the two Secrets, the form shows one of these messages:
+
+- "The Secrets Group must have an HTTP(S) username secret and an HTTP(S) password secret."
+- "The Secrets Group must have an HTTP(S) username secret."
+- "The Secrets Group must have an HTTP(S) password secret."
 
 ### Check the login
 
