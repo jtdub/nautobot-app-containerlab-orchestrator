@@ -436,7 +436,7 @@ The file `development/docker-compose.clab.yml` adds an optional clab-api-server 
 To turn on the local server:
 
 1. On Docker Desktop, turn on Settings > Resources > Network > "Enable host networking", then click "Apply & restart". The server must use the network of the Docker host, because containerlab must see the bridges of the lab networks that it makes.
-2. Make sure that `development/creds.env` has these lines. An existing `creds.env` is a copy of an older `creds.example.env`, so it can be without them. Add the missing lines, and change the password. Use a password without `$`, `#`, quotes, or spaces.
+2. Make sure that `development/creds.env` has these lines. An existing `creds.env` is a copy of an older `creds.example.env`, so it can be without them. Add the missing lines, and change the password. Use a password without `$`, `#`, quotes, or spaces. If `invoke start` stops with "required variable CLAB_DEV_HOST_USERNAME is missing a value", `creds.env` does not have these lines.
 
     ```shell
     CLAB_DEV_HOST_URL=https://host.docker.internal:8090
@@ -484,6 +484,7 @@ At each start, the container makes the account `CLAB_DEV_HOST_USERNAME` in the g
 2. Make a Secrets Group. Add the username Secret with the access type HTTP(S) and the secret type Username.
 3. Add the password Secret with the access type HTTP(S) and the secret type Password.
 4. Make a Containerlab host with the URL `https://host.docker.internal:8090` and the Secrets Group. Turn "Verify SSL" off, because the server uses a self-signed certificate.
+5. Turn on the four lab jobs. Do the steps of "Turn on the job" for [Build Lab Topology](../user/app_use_cases.md#turn-on-the-job), [Deploy Lab](../user/app_use_cases.md#turn-on-the-job_1), [Destroy Lab](../user/app_use_cases.md#turn-on-the-job_2), and [Inspect Lab](../user/app_use_cases.md#turn-on-the-job_4). Nautobot adds each job turned off, so the lab page shows no button for it.
 
 ### Lab rules for the local server
 
