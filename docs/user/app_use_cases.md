@@ -183,7 +183,8 @@ mapping. Use a Device Type mapping when one model needs other settings than the 
 The `default_node_mapping` setting gives the default mapping. See
 [App Configuration](../admin/install.md#app-configuration). The default value is the kind `linux` with the image
 `alpine:latest`. The setting must have a `kind` and an `image`, and no other key. The default mapping has no
-interface table and no config source.
+interface table and no config source. So the default config source of the lab applies. See
+[Startup configs](#startup-configs).
 
 The builder reads the setting only for a device that no mapping matches. If the setting is not valid, the build
 fails with one of these messages:
@@ -194,7 +195,7 @@ fails with one of these messages:
 
 #### Add a node mapping
 
-1. Go to **Containerlab > Node Mappings**, and add a node mapping.
+1. Go to **Containerlab > Node Mappings**. Add a node mapping.
 2. Select a Device type or a Platform.
 3. Enter the kind and the image. Set the other fields only when the node needs them.
 4. In "Interface Mappings", add one row for each cabled interface. Use "Add another interface" for each new row.
@@ -205,7 +206,7 @@ A mapping with no target, or with two targets, does not save. The form shows "Se
 
 | Field | Rules |
 | --- | --- |
-| Kind | The containerlab kind, for example `ceos`. Use lowercase letters, digits, `_`, and `-`, and start with a letter. The app does not check that containerlab has the kind. |
+| Kind | The containerlab kind, for example `ceos`. Use lowercase letters, digits, `_`, and `-`. Start with a letter. The app does not check that containerlab has the kind. |
 | Image | The container image, with no space. The host must have the image before the deploy. See [Before the deploy](#before-the-deploy). |
 | Type | The containerlab node type, if the kind needs one. Leave it empty for the default type of the kind. |
 | Environment variables | A JSON object of strings, for example `{"INTFTYPE": "et"}`. The values are not secret. The REST API, GraphQL, the change log, and webhooks show them. |
@@ -241,7 +242,9 @@ Each row of the interface table has a physical name and a container name:
 - "Container name" is the name that containerlab uses in the link, for example `Gi0-0-0-0`. It must have no space.
 
 Two rows of one mapping cannot have the same physical name or the same container name. The form then shows "Fix
-the errors in the interface rows.", and the rows show "Please correct the duplicate values below.".
+the errors in the interface rows.", and the rows show "Please correct the duplicate values below.". Names that differ
+only in case or accent can also give "Two interface rows have the same name. Names that differ only in case or
+accent count as the same name."
 
 The builder uses the table for the cabled interfaces of each device. To rename the interfaces in a Golden Config
 text, the builder uses the same rows. See [Interface rename](#interface-rename).
@@ -299,7 +302,8 @@ image from the IOL binary with vrnetlab. Load each image on each host.
 | `GigabitEthernet0/0/0/2` | `Gi0-0-0-2` |
 
 XRd accepts only `Gi0-0-0-<N>` names in a link. In the node, `Gi0-0-0-0` is `GigabitEthernet0/0/0/0`. The kinds
-`xrd` and `cisco_xrd` are the same kind.
+`xrd` and `cisco_xrd` are the same kind. A Golden Config source puts `Gi0-0-0-<N>` names in the config, and XR does
+not accept them. For XRd, use a Jinja2 template that writes the physical names of the device.
 
 ##### Cisco IOS
 
@@ -313,8 +317,9 @@ XRd accepts only `Gi0-0-0-<N>` names in a link. In the node, `Gi0-0-0-0` is `Gig
 | `Ethernet1/0` | `Ethernet1/0` |
 
 IOL accepts `Ethernet<slot>/<port>`, `e<slot>/<port>`, or `eth<N>`, with a slot from 0 to 9 and a port from 0 to 3.
-`Ethernet0/0` is the management interface, so a cable on it fails the deploy. containerlab uses the same port for
-`Ethernet0/1` and `eth1`. So do not mix rows and fallback names on one IOL node.
+`Ethernet0/0` is the management interface. A row for `Ethernet0/0` fails the deploy. Mark `Ethernet0/0` as
+management only in Nautobot, so that the builder skips its cable. containerlab uses the same port for `Ethernet0/1`
+and `eth1`. So do not mix rows and fallback names on one IOL node.
 
 ##### Arista EOS
 
