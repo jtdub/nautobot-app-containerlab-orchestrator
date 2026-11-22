@@ -422,6 +422,108 @@ namespace.configure(
 
 Or set the `INVOKE_CONTAINERLAB_ORCHESTRATOR_NAUTOBOT_VER` variable.
 
+## Local clab-api-server
+
+The file `development/docker-compose.clab.yml` adds an optional clab-api-server container to the dev environment. The app jobs can then deploy labs on your own computer. The stack starts the container only when `compose_files` has the file.
+
+!!! warning
+    The container is privileged, uses the host PID namespace, and has the Docker socket. So it has root control of the Docker host. It can stop or remove any container, and it can read the environment of each container, the Nautobot secret key included. On Docker Desktop it can also read and write the folders that Docker Desktop shares from your computer, for example `/Users`.
+
+    The container uses host networking. Docker Desktop opens port 8090 on all the network interfaces of your computer, so other computers on your network can send a login to the server. If a client asks the server for an SSH session, the server also opens a port from 2223 to 2322 on all interfaces. The app does not ask for SSH sessions.
+
+    Use the container only on a dev computer on a network that you trust. Change the dev password. Stop the container when you do not use it.
+
+To turn on the local server:
+
+1. On Docker Desktop, turn on Settings > Resources > Network > "Enable host networking", then click "Apply & restart". The server must use the network of the Docker host, because containerlab must see the bridges of the lab networks that it makes.
+2. Make sure that `development/creds.env` has these lines. An existing `creds.env` is a copy of an older `creds.example.env`, so it can be without them. Add the missing lines, and change the password.
+
+    ```shell
+    CLAB_DEV_HOST_URL=https://host.docker.internal:8090
+    CLAB_DEV_HOST_USERNAME=nautobot
+    CLAB_DEV_HOST_PASSWORD=changeme
+    ```
+
+3. Add `docker-compose.clab.yml` to `compose_files` in `invoke.yml`. The list replaces the default list, so also give the four default files. `invoke.example.yml` has an example.
+
+    ```yaml
+    ---
+    containerlab_orchestrator:
+      compose_files:
+        - "docker-compose.base.yml"
+        - "docker-compose.redis.yml"
+        - "docker-compose.postgres.yml"
+        - "docker-compose.dev.yml"
+        - "docker-compose.clab.yml"
+    ```
+
+4. Run `invoke start`.
+5. Make sure that the login works from the worker. Run `invoke cli --service worker`, then the command below. The result has a `token` key.
+
+    ```shell
+    curl -k -X POST https://host.docker.internal:8090/login \
+      -H "Content-Type: application/json" \
+      -d "{\"username\": \"$CLAB_DEV_HOST_USERNAME\", \"password\": \"$CLAB_DEV_HOST_PASSWORD\"}"
+    ```
+
+!!! note
+    The `ephemeral_ports` setting has no effect when `compose_files` is not the default list. If port 8080 or 8001 is in use, add `docker-compose.ephemeral-ports.yml` to the end of the list.
+
+When `compose_files` has the file, `invoke` gives these values to the container:
+
+- `CLAB_DEV_HOST_USERNAME` and `CLAB_DEV_HOST_PASSWORD` from `creds.env`. The container gets no other value from `creds.env`, so it does not get the Nautobot secrets.
+- `CLAB_LABS_ROOT`, the absolute path of `development/.clab-labs`. Git ignores this folder. The server keeps the topology file of each lab there.
+
+At each start, the container makes the account `CLAB_DEV_HOST_USERNAME` in the group `clab_api`. It also locks the `admin` account of the image and makes a random JWT secret. A token from an earlier start does not work.
+
+### Add the local server in Nautobot
+
+1. Make two Secrets with the "Environment Variable" provider. One reads the variable `CLAB_DEV_HOST_USERNAME`, and one reads `CLAB_DEV_HOST_PASSWORD`. The Nautobot and worker containers get these variables from `creds.env`.
+2. Make a Secrets Group. Add the username Secret with the access type HTTP(S) and the secret type Username.
+3. Add the password Secret with the access type HTTP(S) and the secret type Password.
+4. Make a Containerlab host with the URL `https://host.docker.internal:8090` and the Secrets Group. Turn "Verify SSL" off, because the server uses a self-signed certificate.
+
+### Lab rules for the local server
+
+- The Docker Desktop VM holds the Nautobot stack and all the lab nodes in its memory. Run one lab at a time. Run `docker stats --no-stream` before a deploy. Do not deploy when less than 2 GB is free.
+- The management subnet of a lab must not overlap a Docker network. Docker gives each compose project a network, for example `172.31.0.0/16`. Before you use a subnet, look at the subnet of each network:
+
+    ```shell
+    for n in $(docker network ls -q); do docker network inspect $n --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}'; done
+    ```
+
+- Pull each node image before the deploy, for example `docker pull alpine:latest`. The Deploy Lab job stops when an image is not on the host.
+- Destroy each lab when you do not use it.
+
+### Switch the Nautobot version
+
+A database of a newer Nautobot version does not work with an older version. Start each version from an empty database:
+
+1. Destroy each lab.
+2. Run `invoke destroy`.
+3. Set `nautobot_ver` in `invoke.yml`, for example `"3.2.9"`.
+4. Run `invoke build start`.
+5. Add the Secrets, the Secrets Group, and the host again.
+
+### Turn off the local server
+
+1. Destroy each lab.
+2. Remove `docker-compose.clab.yml` from `compose_files`.
+3. Run `invoke stop`.
+4. Delete `development/.clab-labs/`.
+5. Remove each lab container that stays. `docker ps -a --filter label=containerlab` shows them.
+6. Remove each lab network that stays. `docker network ls --filter label=containerlab` shows them.
+
+### Differences from the upstream container method
+
+The upstream `docker run` method of clab-api-server is for a Linux host. The dev container is different:
+
+- It does not mount `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/gshadow`, or `/home`. On Docker Desktop they would come from macOS, so the container uses its own accounts.
+- It does not mount `/var/run/netns`. The upstream entrypoint makes that folder in the container.
+- It does not mount `/var/lib/docker/containers`. Only the container logs need it, and the app does not read logs.
+- It keeps the lab files in `CLAB_LABS_ROOT`, at the same path on the Docker host and in the container, in place of `/home`.
+- It locks the `admin` account of the image and makes a random JWT secret at each start.
+
 ## Other Miscellaneous Commands To Know
 
 ### Python Shell
