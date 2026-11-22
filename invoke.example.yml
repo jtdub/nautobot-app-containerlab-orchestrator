@@ -14,3 +14,14 @@ containerlab_orchestrator:
 #     - "docker-compose.redis.yml"
 #     - "docker-compose.mysql.yml"
 #     - "docker-compose.dev.yml"
+
+# The following is an example of the local clab-api-server. The list replaces the default list,
+# so it gives the four default files. See "Local clab-api-server" in docs/dev/dev_environment.md.
+# ---
+# containerlab_orchestrator:
+#   compose_files:
+#     - "docker-compose.base.yml"
+#     - "docker-compose.redis.yml"
+#     - "docker-compose.postgres.yml"
+#     - "docker-compose.dev.yml"
+#     - "docker-compose.clab.yml"

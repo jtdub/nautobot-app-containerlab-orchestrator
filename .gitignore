@@ -298,6 +298,7 @@ fabric.properties
 
 # Random
 creds.env
+development/.clab-labs/
 development/*.txt
 !development/towncrier_header.txt
 

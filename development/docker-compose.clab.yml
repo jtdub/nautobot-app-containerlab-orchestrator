@@ -1,0 +1,26 @@
+# Opt-in local clab-api-server for development. See "Local clab-api-server" in docs/dev/dev_environment.md.
+# WARNING: This container is privileged and has the Docker socket, so it has root control of the Docker host.
+# It uses host networking, so port 8090 is open on all network interfaces of the computer.
+# Add this file to compose_files only on a dev computer on a network that you trust.
+# tasks.py gives CLAB_LABS_ROOT and the two CLAB_DEV_HOST_* values when compose_files has this file.
+---
+services:
+  clab-api-server:
+    image: "ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.10.0"
+    # containerlab makes Docker networks and needs their bridges, so the server uses the network of the Docker host.
+    network_mode: "host"
+    privileged: true
+    pid: "host"
+    entrypoint: ["/bin/sh", "/clab-entrypoint.sh"]
+    environment:
+      API_SERVER_HOST: "host.docker.internal"
+      TLS_ENABLE: "true"
+      TLS_AUTO_CERT: "true"
+      CLAB_LABS_ROOT: "${CLAB_LABS_ROOT:?}"
+      CLAB_DEV_HOST_USERNAME: "${CLAB_DEV_HOST_USERNAME:?}"
+      CLAB_DEV_HOST_PASSWORD: "${CLAB_DEV_HOST_PASSWORD:?}"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./clab-api-server-entrypoint.sh:/clab-entrypoint.sh:ro"
+      # The labs root has the same path on the Docker host and in the container, because containerlab needs it.
+      - "${CLAB_LABS_ROOT:?}:${CLAB_LABS_ROOT:?}"
