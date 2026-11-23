@@ -7,8 +7,9 @@ Here you will find any steps necessary to upgrade the App in your Nautobot envir
 !!! warning ""
     WARNING: The app needs Nautobot 3.2.8 or later. If your Nautobot is older, `pip` also upgrades Nautobot, and
     the Nautobot database migrations are hard to undo. Back up the Nautobot database. Upgrade Nautobot with its own
-    upgrade steps before you install or upgrade the app. To keep `pip` from a change to Nautobot, pin `nautobot` in
-    a constraints file and use `pip install -c <file>`.
+    upgrade steps before you install or upgrade the app. If you do not want `pip` to change Nautobot, pin `nautobot`
+    to your installed version in a constraints file. Then use `pip install -c <file>`. If your Nautobot is older
+    than 3.2.8, `pip` then stops with an error and does not install the app.
 
 1. Read the [release notes](release_notes/index.md) of each version after your version.
 2. Upgrade the package. For a Git install, use the `pip install` command of the [Install Guide](install.md#install-guide)
