@@ -64,7 +64,7 @@ namespace = Collection("containerlab_orchestrator")
 namespace.configure(
     {
         "containerlab_orchestrator": {
-            "nautobot_ver": "3.1.0",
+            "nautobot_ver": "3.2.8",
             "project_name": "containerlab-orchestrator",
             "python_ver": "3.12",
             "local": False,

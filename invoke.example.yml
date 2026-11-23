@@ -1,6 +1,6 @@
 ---
 containerlab_orchestrator:
-  nautobot_ver: "3.1.0"
+  nautobot_ver: "3.2.8"
   python_ver: "3.12"
   # local: false
   # ephemeral_ports: false
