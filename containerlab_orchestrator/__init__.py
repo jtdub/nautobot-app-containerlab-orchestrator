@@ -17,6 +17,7 @@ class ContainerlabOrchestratorConfig(NautobotAppConfig):
     author = "Network to Code, LLC"
     description = "Containerlab Orchestrator."
     base_url = "containerlab-orchestrator"
+    min_version = "3.2.8"
     required_settings = []
     default_settings = {
         "default_node_mapping": {"kind": "linux", "image": "alpine:latest"},

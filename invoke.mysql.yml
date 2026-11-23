@@ -1,7 +1,7 @@
 ---
 containerlab_orchestrator:
   project_name: "containerlab-orchestrator"
-  nautobot_ver: "3.1.0"
+  nautobot_ver: "3.2.8"
   local: false
   python_ver: "3.12"
   compose_dir: "development"

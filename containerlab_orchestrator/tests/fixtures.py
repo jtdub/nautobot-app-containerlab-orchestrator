@@ -271,6 +271,16 @@ def create_lab_nodes(labs, lab_devices):
     ]
 
 
+def create_related_object_data():
+    """Return the labs of `create_labs`, with the hosts, devices, nodes, node mappings, and interface mappings."""
+    hosts = create_containerlab_hosts()
+    lab_devices = create_lab_devices()
+    labs = create_labs(hosts, lab_devices)
+    create_lab_nodes(labs, lab_devices)
+    create_interface_mappings(create_node_mappings())
+    return labs
+
+
 def store_yaml(lab, text):
     """Store the topology YAML on the lab row, as a build does, and on the lab instance."""
     Lab.objects.filter(pk=lab.pk).update(topology_yaml=text)

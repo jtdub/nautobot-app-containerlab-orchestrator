@@ -4,7 +4,7 @@ Here you will find detailed instructions on how to **install** and **configure**
 
 ## Prerequisites
 
-- The app is compatible with Nautobot 3.1.0 and higher.
+- The app is compatible with Nautobot 3.2.8 and higher.
 - Databases supported: PostgreSQL, MySQL
 
 !!! note
@@ -24,6 +24,13 @@ Here you will find detailed instructions on how to **install** and **configure**
 
 !!! note
     Apps can be installed from the [Python Package Index](https://pypi.org/) or locally. See the [Nautobot documentation](https://docs.nautobot.com/projects/core/en/stable/user-guide/administration/installation/app-install/) for more details. The pip package name for this app is [`containerlab-orchestrator`](https://pypi.org/project/containerlab-orchestrator/).
+
+!!! warning ""
+    WARNING: The app needs Nautobot 3.2.8 or later. If your Nautobot is older, `pip` also upgrades Nautobot, and
+    the Nautobot database migrations are hard to undo. Back up the Nautobot database. Upgrade Nautobot with its own
+    upgrade steps before you install or upgrade the app. If you do not want `pip` to change Nautobot, pin `nautobot`
+    to your installed version in a constraints file. Then use `pip install -c <file>`. If your Nautobot is older
+    than 3.2.8, `pip` then stops with an error and does not install the app.
 
 The app is available as a Python package via PyPI and can be installed with `pip`:
 

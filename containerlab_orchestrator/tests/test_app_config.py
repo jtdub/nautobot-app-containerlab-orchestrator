@@ -2,6 +2,7 @@
 
 import copy
 import json
+import tomllib
 from pathlib import Path
 
 import jsonschema
@@ -9,6 +10,8 @@ from django.conf import settings
 from django.test import override_settings
 from nautobot.apps.config import get_app_settings_or_config
 from nautobot.apps.testing import TestCase
+from nautobot.extras.plugins.exceptions import PluginImproperlyConfigured
+from packaging.version import Version
 
 import containerlab_orchestrator
 from containerlab_orchestrator import ContainerlabOrchestratorConfig
@@ -27,6 +30,7 @@ CUSTOM_SETTINGS = {
     "stub_node_image": "registry.local/alpine:3",
 }
 SCHEMA_PATH = Path(containerlab_orchestrator.__file__).parent / "app-config-schema.json"
+PYPROJECT_PATH = Path(containerlab_orchestrator.__file__).parents[1] / "pyproject.toml"
 
 
 def validated_config(user_config):
@@ -64,6 +68,23 @@ class AppConfigTestCase(TestCase):
             for key, expected in CUSTOM_SETTINGS.items():
                 with self.subTest(key=key):
                     self.assertEqual(get_app_settings_or_config(APP_NAME, key), expected)
+
+    def test_validate_rejects_nautobot_older_than_min_version(self):
+        with self.assertRaises(PluginImproperlyConfigured):
+            ContainerlabOrchestratorConfig.validate({}, "3.2.7")
+
+    def test_validate_accepts_min_version(self):
+        ContainerlabOrchestratorConfig.validate({}, "3.2.8")
+
+    def test_min_version_matches_pyproject_floor(self):
+        """Check the floor, or in CI, check the pin that `invoke lock --constrain-nautobot-ver` writes as a table."""
+        pyproject = tomllib.loads(PYPROJECT_PATH.read_text())
+        nautobot_constraint = pyproject["tool"]["poetry"]["dependencies"]["nautobot"]
+        min_version = ContainerlabOrchestratorConfig.min_version
+        if isinstance(nautobot_constraint, dict):
+            self.assertGreaterEqual(Version(nautobot_constraint["version"]), Version(min_version))
+        else:
+            self.assertTrue(nautobot_constraint.startswith(f">={min_version},"))
 
 
 class AppConfigSchemaTestCase(TestCase):
