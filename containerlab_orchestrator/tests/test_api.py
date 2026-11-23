@@ -4,11 +4,14 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import ForeignKey, ManyToManyField
 from django.test import RequestFactory, override_settings
 from nautobot.apps.choices import JobResultStatusChoices
-from nautobot.apps.testing import APIViewTestCases, TransactionTestCase, create_job_result_and_run_job
-from nautobot.dcim.models import DeviceType, Location, Manufacturer, Platform
-from nautobot.extras.models import DynamicGroup, ObjectChange, Status
+from nautobot.apps.testing import APITestCase, APIViewTestCases, TransactionTestCase, create_job_result_and_run_job
+from nautobot.core.models.fields import TagsField
+from nautobot.dcim.models import Device, DeviceType, Location, Manufacturer, Platform
+from nautobot.extras.models import DynamicGroup, ObjectChange, Status, Tag
+from nautobot.users.models import ObjectPermission
 from rest_framework import status
 
 from containerlab_orchestrator import config_sources
@@ -25,12 +28,43 @@ from containerlab_orchestrator.tests.fixtures import (
     create_lab_nodes,
     create_labs,
     create_node_mappings,
+    create_related_object_data,
+    grant_permission,
     patch_secret_variables,
 )
 from containerlab_orchestrator.validators import CIDR_MESSAGE, SIZE_MESSAGE
 
 OWNER_KEYS = {"id", "object_type", "url", "display", "username"}
 """The keys of a lab owner in the REST API at depth 1 or more, and in the change log."""
+
+BRIEF_KEYS = {"id", "object_type", "url", "display"}
+"""The keys of a related object at depth 1 or more when the user cannot view it."""
+
+LAB_A = {"name": "lab-a", "host__name": "clab01"}
+LEAF1_OF_LAB_A = {"lab__name": "lab-a", "lab__host__name": "clab01", "node_name": "leaf1"}
+SPINE1_OF_LAB_A = {**LEAF1_OF_LAB_A, "node_name": "spine1"}
+
+RELATED_FIELD_ROWS = (
+    (Lab, LAB_A, "depth=1", ("host",), ()),
+    (Lab, LAB_A, "depth=1", ("status",), ()),
+    (Lab, LAB_A, "depth=1", ("tags",), ()),
+    (Lab, LAB_A, "depth=1&exclude_m2m=false", ("devices",), ()),
+    (Lab, {"name": "lab-b"}, "depth=1", ("dynamic_group",), ()),
+    (LabNode, LEAF1_OF_LAB_A, "depth=1", ("lab",), ()),
+    (LabNode, LEAF1_OF_LAB_A, "depth=1", ("device",), ()),
+    (ContainerlabHost, {"name": "clab01"}, "depth=1", ("secrets_group",), ()),
+    (NodeMapping, {"kind": "ceos"}, "depth=1", ("device_type",), ()),
+    (NodeMapping, {"kind": "linux"}, "depth=1", ("platform",), ()),
+    (InterfaceMapping, {"physical_name": "ens3"}, "depth=1", ("node_mapping",), ()),
+    (LabNode, LEAF1_OF_LAB_A, "depth=2", ("lab", "host"), ("containerlab_orchestrator.view_lab",)),
+)
+"""Each row: root model, lookup, query, path to the related field, and the permissions beside the root view."""
+
+SHARED_TAGS_FIELDS = (("containerlabhost", "tags"), ("nodemapping", "tags"))
+"""The `tags` fields of the other primary models. Nautobot gives each one the same `TagsField` as the lab row."""
+
+OWNER_FIELD = ("lab", "owner")
+"""The lab owner, which `test_owner_shows_no_user_data_except_the_username` covers."""
 
 
 class ContainerlabHostAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-many-ancestors
@@ -375,18 +409,25 @@ class LabAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disable=too-m
         saved_lab.refresh_from_db()
         self.assertEqual((saved_lab.name, saved_lab.config_source), ("lab-gc", intended))
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
     def test_owner_shows_no_user_data_except_the_username(self):
-        """Nautobot 3.2 and later also drop `username` for a user who cannot view users."""
+        """Show only the username of the owner, and only to a user who can view users."""
         self.add_permissions("containerlab_orchestrator.view_lab")
-        for depth in (0, 1, 2):
-            with self.subTest(depth=depth):
+        for depth, expected in ((0, {"id", "object_type", "url"}), (1, BRIEF_KEYS), (2, BRIEF_KEYS)):
+            with self.subTest(depth=depth, view_user=False):
                 response = self.client.get(f"{self._get_detail_url(self.labs[0])}?depth={depth}", **self.header)
                 self.assertHttpStatus(response, status.HTTP_200_OK)
-                self.assertLessEqual({"id", "object_type", "url"}, set(response.data["owner"]))
-                self.assertLessEqual(set(response.data["owner"]), OWNER_KEYS)
+                self.assertEqual(set(response.data["owner"]), expected)
+
+        self.add_permissions("users.view_user")
+        for depth in (1, 2):
+            with self.subTest(depth=depth, view_user=True):
+                response = self.client.get(f"{self._get_detail_url(self.labs[0])}?depth={depth}", **self.header)
+                self.assertHttpStatus(response, status.HTTP_200_OK)
+                self.assertEqual(set(response.data["owner"]), OWNER_KEYS)
 
     def test_create_outside_the_rest_api_fails(self):
-        """Nautobot 3.2 and later send the job user to the CSV import in a request that is not a REST API request."""
+        """Reject a create from a request that is not a REST API request, as in the CSV import job."""
         self.add_permissions("containerlab_orchestrator.view_containerlabhost")
         request = RequestFactory().post("/")
         request.user = self.user
@@ -444,6 +485,63 @@ class LabNodeAPITestCase(  # pylint: disable=too-many-ancestors
     def test_get_absolute_url_for_api_gives_row_url(self):
         node = LabNode.objects.get(node_name="stub-wan1")
         self.assertTrue(node.get_absolute_url(api=True).endswith(f"/lab-nodes/{node.pk}/"))
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class RelatedObjectPermissionAPITestCase(APITestCase):  # pylint: disable=too-many-ancestors
+    """Test that the REST API shows a related object that the user cannot view as its brief form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        labs = create_related_object_data()
+        tag = Tag.objects.create(name="Lab tag")
+        tag.content_types.add(ContentType.objects.get_for_model(Lab))
+        labs[0].tags.add(tag)
+
+    def _set_view_permissions(self, model, *permissions):
+        """Give the user only the view permission of the model and the given permissions."""
+        ObjectPermission.objects.filter(users=self.user).delete()
+        self.add_permissions(f"{model._meta.app_label}.view_{model._meta.model_name}", *permissions)
+
+    def _get(self, model, lookup, query):
+        """GET the object that the lookup finds, with the query, and return the response data."""
+        url = f"{model.objects.get(**lookup).get_absolute_url(api=True)}?{query}"
+        response = self.client.get(url, **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        return response.data
+
+    def test_depth_shows_brief_form_of_related_object_without_view_permission(self):
+        for model, lookup, query, path, permissions in RELATED_FIELD_ROWS:
+            with self.subTest(model=model.__name__, query=query, path=path):
+                self._set_view_permissions(model, *permissions)
+                value = self._get(model, lookup, query)
+                for key in path:
+                    value = value[key]
+                items = value if isinstance(value, list) else [value]
+                self.assertTrue(items)
+                for item in items:
+                    self.assertEqual(set(item), BRIEF_KEYS)
+
+        with self.subTest("view permission of the host"):
+            self._set_view_permissions(Lab, "containerlab_orchestrator.view_containerlabhost")
+            self.assertEqual(self._get(Lab, LAB_A, "depth=1")["host"]["name"], "clab01")
+
+        with self.subTest("constrained view permission of the devices"):
+            self._set_view_permissions(LabNode)
+            grant_permission(self.user, Device, "view", {"name": "leaf1"})
+            self.assertEqual(self._get(LabNode, LEAF1_OF_LAB_A, "depth=1")["device"]["name"], "leaf1")
+            self.assertEqual(set(self._get(LabNode, SPINE1_OF_LAB_A, "depth=1")["device"]), BRIEF_KEYS)
+
+    def test_table_covers_each_relation(self):
+        related_fields = {
+            (model._meta.model_name, field.name)
+            for model in (ContainerlabHost, NodeMapping, InterfaceMapping, Lab, LabNode)
+            for field in model._meta.get_fields()
+            if isinstance(field, (ForeignKey, ManyToManyField, TagsField))
+        }
+        table_fields = {(model._meta.model_name, path[0]) for model, _, _, path, _ in RELATED_FIELD_ROWS}
+
+        self.assertEqual(related_fields, table_fields | {OWNER_FIELD, *SHARED_TAGS_FIELDS})
 
 
 class LabCsvImportJobTestCase(TransactionTestCase):

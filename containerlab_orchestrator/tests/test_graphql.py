@@ -1,8 +1,12 @@
 """Tests for the GraphQL types of the app."""
 
+from django.contrib.auth import get_user_model
+from django.test import override_settings
 from django.urls import reverse
 from nautobot.apps.graphql import execute_query
 from nautobot.apps.testing import TestCase
+from nautobot.dcim.models import Device
+from nautobot.users.models import ObjectPermission
 
 from containerlab_orchestrator.tests.fixtures import (
     SECRET_VALUE,
@@ -12,6 +16,8 @@ from containerlab_orchestrator.tests.fixtures import (
     create_lab_nodes,
     create_labs,
     create_node_mappings,
+    create_related_object_data,
+    grant_permission,
     patch_secret_variables,
 )
 
@@ -98,6 +104,40 @@ query {
   }
 }
 """
+
+HIDDEN_RELATED_OBJECT_ROWS = (
+    (
+        "containerlab_orchestrator.view_lab",
+        'query { labs(name: "lab-b") { host { name } status { name } dynamic_group { name } devices { name } } }',
+        {"labs": [{"host": None, "status": None, "dynamic_group": None, "devices": []}]},
+    ),
+    (
+        "containerlab_orchestrator.view_labnode",
+        'query { lab_nodes(node_name: "spine1") { lab { name } device { name } } }',
+        {"lab_nodes": [{"lab": None, "device": None}]},
+    ),
+    (
+        "containerlab_orchestrator.view_containerlabhost",
+        'query { containerlab_hosts(name: "clab01") { secrets_group { name } } }',
+        {"containerlab_hosts": [{"secrets_group": None}]},
+    ),
+    (
+        "containerlab_orchestrator.view_nodemapping",
+        'query { node_mappings(kind: "ceos") { device_type { model } } }',
+        {"node_mappings": [{"device_type": None}]},
+    ),
+    (
+        "containerlab_orchestrator.view_nodemapping",
+        'query { node_mappings(kind: "linux") { platform { name } } }',
+        {"node_mappings": [{"platform": None}]},
+    ),
+    (
+        "containerlab_orchestrator.view_interfacemapping",
+        'query { interface_mappings(physical_name: "ens3") { node_mapping { kind } } }',
+        {"interface_mappings": [{"node_mapping": None}]},
+    ),
+)
+"""Each row: the only permission of the user, the query, and the data that the query returns."""
 
 
 class ContainerlabHostGraphQLTestCase(TestCase):
@@ -262,3 +302,44 @@ class LabGraphQLTestCase(TestCase):
         self.assertEqual(labs.data["labs"], [{"name": "lab-b"}])
         self.assertIsNone(stubs.errors)
         self.assertEqual(stubs.data["lab_nodes"], [{"node_name": "stub-wan1"}])
+
+
+@override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+class RelatedObjectPermissionGraphQLTestCase(TestCase):
+    """Test that GraphQL hides a related object that the user cannot view."""
+
+    @classmethod
+    def setUpTestData(cls):
+        create_related_object_data()
+
+    def _user_with(self, *permissions):
+        """Give the user only the given permissions, and return the user with an empty permission cache."""
+        ObjectPermission.objects.filter(users=self.user).delete()
+        self.add_permissions(*permissions)
+        return get_user_model().objects.get(pk=self.user.pk)
+
+    def _query(self, query, user):
+        """Run the query as the user, check that it has no errors, and return the data."""
+        result = execute_query(query, user=user)
+        self.assertIsNone(result.errors)
+        return result.data
+
+    def test_related_object_without_view_permission_is_hidden(self):
+        for permission, query, expected in HIDDEN_RELATED_OBJECT_ROWS:
+            with self.subTest(query=query):
+                self.assertEqual(self._query(query, self._user_with(permission)), expected)
+
+        with self.subTest("view permission of the devices"):
+            user = self._user_with("containerlab_orchestrator.view_lab", "dcim.view_device")
+            data = self._query('query { labs(name: "lab-b") { devices { name } } }', user)
+            self.assertEqual(data, {"labs": [{"devices": [{"name": "leaf2"}]}]})
+
+        with self.subTest("constrained view permission of the devices"):
+            self._user_with("containerlab_orchestrator.view_labnode")
+            grant_permission(self.user, Device, "view", {"name": "leaf1"})
+            user = get_user_model().objects.get(pk=self.user.pk)
+            nodes = self._query("query { lab_nodes { node_name device { name } } }", user)["lab_nodes"]
+            self.assertEqual(
+                [node["device"] for node in nodes if node["node_name"] == "leaf1"], [{"name": "leaf1"}] * 2
+            )
+            self.assertEqual([node["device"] for node in nodes if node["node_name"] == "spine1"], [None])
