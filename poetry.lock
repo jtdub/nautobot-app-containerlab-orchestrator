@@ -7310,4 +7310,4 @@ golden-config = ["nautobot-golden-config"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "cdfdbc7dc2d60e8d4d40646a29a5071765ac10fbde55e99166c9f7f1f9a76291"
+content-hash = "b8007d74e407af8b71722cbf51e478840d371dff95fb71537caac0063cc835b6"
