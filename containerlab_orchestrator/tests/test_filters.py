@@ -93,6 +93,11 @@ class NodeMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disa
         result = self.filterset({"config_source": ["none"]}, self.queryset).qs
         self.assertQuerySetEqual(result, self.queryset.filter(device_type__model="7220 IXR-D3"))
 
+    def test_rename_interfaces(self):
+        NodeMapping.objects.filter(platform__name="edge-router").update(rename_interfaces=False)
+        result = self.filterset({"rename_interfaces": False}, self.queryset).qs
+        self.assertQuerySetEqual(result, self.queryset.filter(platform__name="edge-router"))
+
 
 class InterfaceMappingFilterTestCase(FilterTestCases.FilterTestCase):  # pylint: disable=too-many-ancestors
     """Run the generic Nautobot filter tests on InterfaceMappingFilterSet."""

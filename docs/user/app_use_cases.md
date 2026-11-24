@@ -1328,6 +1328,13 @@ A kind with no alias can use the physical names in its config. In a `ceos` node,
 `Ethernet49`. For such a kind, clear "Rename interfaces" on the node mapping. The builder then uses the Golden Config
 text as it is, and it gives no rename warning. The interface table still gives the link names.
 
+With "Rename interfaces" cleared, give each container name the same port number as its physical name. For example,
+map `Ethernet49` to `eth49`. The builder does not compare the two numbers. If `Ethernet1` maps to `eth3`, the config
+sets up `Ethernet1`, but the link connects to `Ethernet3`.
+
+A device with no node mapping gets the default mapping, which always renames. To keep the physical names for such a
+device, add a node mapping for its Device Type or its Platform.
+
 The Jinja2 source does not rename. A template uses `interface_map` directly.
 
 #### What the stored YAML shows

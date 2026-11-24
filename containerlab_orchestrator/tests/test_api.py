@@ -158,7 +158,7 @@ class NodeMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disab
                 "overrides": {"startup-delay": 30},
             },
         ]
-        cls.update_data = {"image": "ceos:4.33.0F", "memory": "4Gb"}
+        cls.update_data = {"image": "ceos:4.33.0F", "memory": "4Gb", "rename_interfaces": False}
         cls.bulk_update_data = {"config_source": "none"}
 
     def _post_invalid(self, **data):

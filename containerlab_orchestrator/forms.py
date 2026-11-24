@@ -170,6 +170,9 @@ class NodeMappingBulkEditForm(TagsBulkEditFormMixin, NautobotBulkEditForm):  # p
         widget=StaticSelect2(),
         label="Config source",
     )
+    rename_interfaces = forms.NullBooleanField(
+        required=False, label="Rename interfaces", widget=BulkEditNullBooleanSelect
+    )
 
     class Meta:
         """Meta attributes for NodeMappingBulkEditForm."""
@@ -181,7 +184,7 @@ class NodeMappingFilterForm(NautobotFilterForm):  # pylint: disable=too-many-anc
     """Form to filter the NodeMapping list."""
 
     model = NodeMapping
-    field_order = ["q", "device_type", "platform", "kind", "config_source", "tag"]
+    field_order = ["q", "device_type", "platform", "kind", "config_source", "rename_interfaces", "tag"]
 
     q = forms.CharField(required=False, label="Search")
     device_type = DynamicModelMultipleChoiceField(
@@ -201,6 +204,11 @@ class NodeMappingFilterForm(NautobotFilterForm):  # pylint: disable=too-many-anc
         choices=add_blank_choice(NodeMappingConfigSourceChoices),
         widget=StaticSelect2(),
         label="Config source",
+    )
+    rename_interfaces = forms.NullBooleanField(
+        required=False,
+        label="Rename interfaces",
+        widget=StaticSelect2(choices=add_blank_choice((("True", "Yes"), ("False", "No")))),
     )
     tag = TagFilterField(model)
 
