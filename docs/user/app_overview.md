@@ -28,8 +28,8 @@ The app talks to each host only through the clab-api-server REST API. It needs n
 
 - Models: containerlab hosts, node mappings, interface mappings, labs, and lab nodes.
 - Statuses: a lab has the status Planned, Built, Deployed, Failed, or Destroyed.
-- Jobs: Build Lab Topology, Deploy Lab, Redeploy Lab, Destroy Lab, Inspect Lab, and Sync Labs. Nautobot adds each
-  job turned off.
+- Jobs: Build Lab Topology, Deploy Lab, Redeploy Lab, Destroy Lab, Inspect Lab, and Sync Labs. The app turns on
+  each job when you install the app.
 - Navigation: the **Containerlab** menu, with Labs, Containerlab Hosts, and Node Mappings.
 - The lab page: a button for each lab job, the Devices panel, the Nodes table, and the Topology and Topology YAML tabs.
 - Panels: a Node Mappings panel on the Device Type page and on the Platform page.

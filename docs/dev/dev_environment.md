@@ -525,7 +525,7 @@ At each start, the container makes the account `CLAB_DEV_HOST_USERNAME` in the g
 2. Make a Secrets Group. Add the username Secret with the access type HTTP(S) and the secret type Username.
 3. Add the password Secret with the access type HTTP(S) and the secret type Password.
 4. Make a Containerlab host with the URL `https://host.docker.internal:8090` and the Secrets Group. Turn "Verify SSL" off, because the server uses a self-signed certificate.
-5. Turn on the four lab jobs. Do the steps of "Turn on the job" for [Build Lab Topology](../user/app_use_cases.md#turn-on-the-job), [Deploy Lab](../user/app_use_cases.md#turn-on-the-job_1), [Destroy Lab](../user/app_use_cases.md#turn-on-the-job_2), and [Inspect Lab](../user/app_use_cases.md#turn-on-the-job_4). Nautobot adds each job turned off, so the lab page shows no button for it.
+5. Open a lab. The page shows a button for each lab job, because the app turns on its jobs when it migrates the database.
 
 ### Lab rules for the local server
 

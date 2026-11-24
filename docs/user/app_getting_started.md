@@ -74,14 +74,13 @@ Install the app. Add it to `PLUGINS`. See [Install Guide](../admin/install.md#in
 
 The lab page shows you as the owner, and the status Planned. See [Make a lab](app_use_cases.md#make-a-lab).
 
-### Step 6: Turn on the jobs
+### Step 6: Find the job buttons
 
-Nautobot adds each job of the app turned off. Do the steps of "Turn on the job" for
-[Build Lab Topology](app_use_cases.md#turn-on-the-job), [Deploy Lab](app_use_cases.md#turn-on-the-job_1),
-[Destroy Lab](app_use_cases.md#turn-on-the-job_2), and [Inspect Lab](app_use_cases.md#turn-on-the-job_4).
+The app turns on each of its jobs when you install the app. So the lab page shows the buttons Build, Deploy,
+Destroy, and Inspect. See [Start a lab job from the lab page](app_use_cases.md#start-a-lab-job-from-the-lab-page).
 
-The lab page then shows the buttons Build, Deploy, Destroy, and Inspect. See
-[Start a lab job from the lab page](app_use_cases.md#start-a-lab-job-from-the-lab-page).
+If a button is not there, an administrator turned its job off, or you cannot run the job. See
+[Who sees a button](app_use_cases.md#who-sees-a-button).
 
 ### Step 7: Build the lab
 
