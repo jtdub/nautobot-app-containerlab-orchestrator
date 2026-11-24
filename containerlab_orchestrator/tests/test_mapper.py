@@ -89,6 +89,7 @@ class ResolveMappingTestCase(MapperTestCase):
                 "overrides": {},
                 "config_source": "",
                 "config_template": "",
+                "rename_interfaces": True,
                 "device_type": None,
                 "platform": None,
             },
@@ -106,6 +107,7 @@ class ResolveMappingTestCase(MapperTestCase):
         mapping = resolve_mapping(Device(name="srv1", device_type=self.unmapped_type))
         self.assertEqual(list(mapping.interface_mappings.all()), [])
         self.assertEqual(str(mapping), "Default mapping")
+        self.assertTrue(mapping.rename_interfaces)
 
     def test_default_mapping_does_not_share_or_change_the_setting(self):
         setting_before = copy.deepcopy(get_app_settings_or_config(APP_NAME, "default_node_mapping"))

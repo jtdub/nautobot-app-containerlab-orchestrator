@@ -143,7 +143,10 @@ def rename_interfaces(text, rename_map):
 
 
 def _golden_config_startup_config(device, mapping, interface_map, source, user):
-    """Return the renamed Golden Config text of the device, or None, and the warnings."""
+    """Return the Golden Config text of the device, or None, and the warnings.
+
+    The text gets the container names only when the rename_interfaces flag of the mapping is on.
+    """
     if not golden_config_installed():
         return None, [W_GOLDEN_CONFIG_NOT_INSTALLED.format(device=device, source=source_label(source))]
     text = _golden_config_text(device, source, user)
@@ -151,6 +154,8 @@ def _golden_config_startup_config(device, mapping, interface_map, source, user):
         return None, [W_NO_GOLDEN_CONFIG.format(device=device)]
     if not text.strip():
         return None, [W_EMPTY_CONFIG.format(device=device, source=source_label(source))]
+    if not mapping.rename_interfaces:
+        return text, []
     rename_map = {row.physical_name: row.container_name for row in mapping.interface_mappings.all()}
     warnings = [
         W_RENAME_FALLBACK.format(device=device, interface=name)

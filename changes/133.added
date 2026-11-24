@@ -1,0 +1,1 @@
+Added the "Rename interfaces" option to node mappings. Clear it to keep the physical interface names of a Golden Config startup config, for example for cEOS.

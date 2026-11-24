@@ -220,6 +220,7 @@ A mapping with no target, or with two targets, does not save. The form shows "Se
 | Memory | A number and a unit, for example `512mb` or `1Gb`. |
 | Overrides | A JSON object of other containerlab node keys. See [Overrides](#overrides). |
 | Config source, Config template | The startup config of the node. See [Startup configs](#startup-configs). |
+| Rename interfaces | On by default. Clear it to keep the physical interface names in a Golden Config text. See [Interface rename](#interface-rename). |
 
 The builder drops each value that holds `$` or `{{`, and it gives a warning. containerlab would replace such a value
 with data from the host before it reads the topology. The builder also drops the env entry `__IMPORT_ENVS`. A kind
@@ -343,6 +344,9 @@ cEOS accepts `eth<N>` names in a link. In the node, `eth1` is `Ethernet1`. For a
 
 cEOS has no `Ethernet<N>` alias. Do not use `Ethernet1` as a container name. The `EosIntfMapping.json` file of
 containerlab needs `binds`, which the builder drops. Use the interface table.
+
+If the physical port numbers are the same as the cEOS port numbers, clear "Rename interfaces" for a Golden Config
+source. See [Interface rename](#interface-rename).
 
 ##### Nokia SR Linux
 
@@ -1319,6 +1323,17 @@ the interface table of the node mapping to the `container_name` of the row. Thes
 The node OS must accept the new name. containerlab v0.56.0 and later accept the interface alias of the kind as a
 link name, for example `Ethernet0/1` for `cisco_iol`. Put that alias in the `container_name` column, so the config
 gets a name that the node OS uses. Some kinds, for example `ceos`, have no alias. See the [examples](#examples).
+
+A kind with no alias can use the physical names in its config. In a `ceos` node, the link `eth49` is the interface
+`Ethernet49`. For such a kind, clear "Rename interfaces" on the node mapping. The builder then uses the Golden Config
+text as it is, and it gives no rename warning. The interface table still gives the link names.
+
+With "Rename interfaces" cleared, give each container name the same port number as its physical name. For example,
+map `Ethernet49` to `eth49`. The builder does not compare the two numbers. If `Ethernet1` maps to `eth3`, the config
+sets up `Ethernet1`, but the link connects to `Ethernet3`.
+
+A device with no node mapping gets the default mapping, which always renames. To keep the physical names for such a
+device, add a node mapping for its Device Type or its Platform.
 
 The Jinja2 source does not rename. A template uses `interface_map` directly.
 
