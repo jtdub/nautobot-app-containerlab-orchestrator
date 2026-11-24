@@ -1,2 +1,0 @@
-Added a Topology YAML tab with a Download YAML button to the lab page.
-Added the REST API endpoint `/api/plugins/containerlab-orchestrator/labs/<id>/topology/`, which downloads the stored topology YAML.

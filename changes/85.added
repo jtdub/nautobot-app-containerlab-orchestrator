@@ -1,2 +1,0 @@
-Added the Redeploy Lab job turned off. An administrator turns it on under Jobs and gives the permissions in the user docs.
-Added the Redeploy Lab job, which removes a Deployed or Failed lab and its lab directory, then deploys the stored topology again.

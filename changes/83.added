@@ -1,3 +1,0 @@
-Added the Destroy Lab job turned off. An administrator turns it on under Jobs and gives the permissions in the user docs.
-Added the Destroy Lab job, which deletes the containers and the lab directory of a Deployed or Failed lab on its host.
-Added the option Keep the lab directory, so a later Deploy Lab job keeps the saved configs and the cisco_iol NVRAM.

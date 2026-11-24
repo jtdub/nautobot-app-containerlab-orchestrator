@@ -134,10 +134,15 @@ jobs:
           TOWNCRIER_NOTES=$(poetry run towncrier build --version "${{ env.NEW_VERSION }}" --date "${{ env.RELEASE_DATE }}" --draft)
 
           # 2. Call GitHub API to generate raw notes
+          # The API accepts only a tag as previous_tag_name, so leave it out when PREVIOUS_TAG is the first commit.
+          PREVIOUS_TAG_ARGS=()
+          if git rev-parse --quiet --verify "refs/tags/${{ env.PREVIOUS_TAG }}" > /dev/null; then
+            PREVIOUS_TAG_ARGS=(-f previous_tag_name="${{ env.PREVIOUS_TAG }}")
+          fi
           RAW_GH_NOTES=$(gh api /repos/${{ github.repository }}/releases/generate-notes \
             -f tag_name="v${{ env.NEW_VERSION }}" \
             -f target_commitish="${{ github.event.inputs['target_branch'] == 'main' && 'develop' || github.event.inputs['target_branch'] }}" \
-            -f previous_tag_name="${{ env.PREVIOUS_TAG }}" --jq '.body')
+            "${PREVIOUS_TAG_ARGS[@]}" --jq '.body')
 
           # 3. Parse usernames (Regex match)
           # We use grep to find "@user" patterns, sort, and uniq them

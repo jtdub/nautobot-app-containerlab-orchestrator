@@ -1,3 +1,0 @@
-Added the Sync Labs job turned off. An administrator turns it on under Jobs and schedules it as the user docs show.
-Added one log line for each Deployed or Failed lab that the user of the schedule can view and change, and a summary line.
-Added skip rules to Sync Labs for an unchanged lab, a lab with a running lab job, and a host that reports no labs.
