@@ -1,6 +1,6 @@
 ---
 name: 🐛 Bug Report
-about: Report a reproducible bug in the current release of containerlab-orchestrator
+about: Report a reproducible bug in the current release of nautobot-containerlab-orchestrator
 labels:
   - "type: bug"
 ---
@@ -8,7 +8,7 @@ labels:
 ### Environment
 * Python version:  <!-- Example: 3.11.4 -->
 * Nautobot version:  <!-- Example: 3.1.0 -->
-* containerlab-orchestrator version:  <!-- Example: 1.0.0 -->
+* nautobot-containerlab-orchestrator version:  <!-- Example: 1.0.0 -->
 
 <!-- What did you expect to happen? -->
 ### Expected Behavior
