@@ -1,1 +1,0 @@
-Changed the minimum Nautobot version from 3.1.0 to 3.2.8, so upgrade Nautobot before you upgrade the app.

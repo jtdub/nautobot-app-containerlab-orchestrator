@@ -168,7 +168,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.towncrier]
 package = "containerlab_orchestrator"
 directory = "changes"
-filename = "docs/admin/release_notes/version_X.Y.md"
+filename = "docs/admin/release_notes/version_1.0.md"
 template = "development/towncrier_template.j2"
 start_string = "<!-- towncrier release notes start -->"
 issue_format = "[#{issue}](https://github.com/jtdub/nautobot-app-containerlab-orchestrator/issues/{issue})"

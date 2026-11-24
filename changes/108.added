@@ -1,2 +1,0 @@
-Added Build, Deploy, Redeploy, Destroy, and Inspect buttons to the lab page, which open the job form with the lab selected.
-Added a button for each lab job only after an administrator turns on that job.

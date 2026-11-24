@@ -1,1 +1,0 @@
-Changed the labs REST API to leave out `topology_yaml`. Use the topology endpoint to get the YAML.

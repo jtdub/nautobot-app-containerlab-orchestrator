@@ -1,48 +1,19 @@
 # v1.0 Release Notes
 
-!!! warning "Developer Note - Remove Me!"
-    Guiding Principles:
+This document describes all new features and changes in the release. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-    - Changelogs are for humans, not machines.
-    - There should be an entry for every single version.
-    - The same types of changes should be grouped.
-    - Versions and sections should be linkable.
-    - The latest version comes first.
-    - The release date of each version is displayed.
-    - Mention whether you follow Semantic Versioning.
+<!-- towncrier release notes start -->
 
-    Types of changes:
-
-    - `Added` for new features.
-    - `Changed` for changes in existing functionality.
-    - `Deprecated` for soon-to-be removed features.
-    - `Removed` for now removed features.
-    - `Fixed` for any bug fixes.
-    - `Security` in case of vulnerabilities.
-
-
-This document describes all new features and changes in the release `1.0`. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## Release Overview
-
-- Major features or milestones
-- Achieved in this `x.y` release
-- Changes to compatibility with Nautobot and/or other apps, libraries etc.
-
-## [v1.0.1] - 2021-09-08
+## [v1.0.0 (2026-11-24)](https://github.com/jtdub/nautobot-app-containerlab-orchestrator/releases/tag/v1.0.0)
 
 ### Added
 
-### Changed
-
-### Fixed
-
-- [#123](https://github.com/jtdub/nautobot-app-containerlab-orchestrator/issues/123) Fixed Tag filtering not working in job launch form
-
-## [v1.0.0] - 2021-08-03
-
-### Added
-
-### Changed
-
-### Fixed
+- Added containerlab hosts. A host stores the clab-api-server URL, the Verify SSL setting, and a Secrets Group.
+- Added node mappings and interface mappings. They give the containerlab kind, image, and interface names for a Device Type or a Platform.
+- Added labs. A lab selects Nautobot devices, and the lab page shows the nodes, a Topology graph, and the topology YAML.
+- Added the Build Lab Topology job, which builds the containerlab topology of a lab from its devices and cables.
+- Added the Deploy Lab, Redeploy Lab, Destroy Lab, and Inspect Lab jobs, which run a lab on its host through clab-api-server.
+- Added the Sync Labs job, which updates the status of each Deployed or Failed lab on a schedule.
+- Added Golden Config intended and backup configs as the startup config of a lab node.
+- Added job buttons to the lab page. The app turns on all six jobs when you install it.
+- Added hosts, node mappings, interface mappings, labs, and lab nodes to the REST API and GraphQL.
