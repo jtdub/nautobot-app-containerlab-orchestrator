@@ -143,7 +143,12 @@ class NodeMappingAPITestCase(APIViewTestCases.APIViewTestCase):  # pylint: disab
         vmx = DeviceType.objects.create(manufacturer=juniper, model="vMX")
         cls.free_platform = Platform.objects.create(name="frr")
         cls.create_data = [
-            {"device_type": cls.free_device_type.pk, "kind": "ceos", "image": "ceos:4.33.0F"},
+            {
+                "device_type": cls.free_device_type.pk,
+                "kind": "ceos",
+                "image": "ceos:4.33.0F",
+                "rename_interfaces": False,
+            },
             {"platform": cls.free_platform.pk, "kind": "linux", "image": "frrouting/frr:v8.4.1"},
             {
                 "device_type": vmx.pk,

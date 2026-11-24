@@ -36,6 +36,7 @@ class DefaultMapping:  # pylint: disable=too-many-instance-attributes
     overrides: dict = field(default_factory=dict)
     config_source: str = ""
     config_template: str = ""
+    rename_interfaces: bool = True
     device_type: None = None
     platform: None = None
 

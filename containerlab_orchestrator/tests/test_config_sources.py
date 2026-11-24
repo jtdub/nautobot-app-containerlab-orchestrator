@@ -439,6 +439,14 @@ class GoldenConfigSourceTestCase(StartupConfigTestCase):  # pylint: disable=too-
         self.assertEqual(node["startup-config"], f"secret $$$$9$$$$x\n{RENAMED_TEXT}")
         self.assertEqual(warnings, [])
 
+    def test_rename_off_keeps_the_physical_names_without_rename_warning(self):
+        self.add_golden_config(self.arista1, backup=f"{GOLDEN_CONFIG_TEXT}interface Ethernet5\n")
+        self.connect(self.add_interfaces(self.arista1, "Ethernet5")[0], self.add_interfaces(self.leaf1, "eth9")[0])
+        NodeMapping.objects.filter(pk=self.arista_mapping.pk).update(rename_interfaces=False)
+        node, warnings = self.arista_config(BACKUP)
+        self.assertEqual(node["startup-config"], f"{GOLDEN_CONFIG_TEXT}interface Ethernet5\n")
+        self.assertNotIn(W_RENAME_FALLBACK.format(device="arista1", interface="Ethernet5"), warnings)
+
     def test_no_record_warns_and_gives_no_config(self):
         for source in (INTENDED, BACKUP):
             with self.subTest(source=source):

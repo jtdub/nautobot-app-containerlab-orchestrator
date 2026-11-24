@@ -282,7 +282,13 @@ class NodeMappingUIViewSet(NautobotUIViewSet):  # pylint: disable=too-many-ances
             ObjectFieldsPanel(
                 weight=100,
                 section=SectionChoices.LEFT_HALF,
-                fields=["device_type", "platform", "kind", "image", "node_type", "cpu", "memory", "config_source"],
+                fields=["device_type", "platform", "kind", "image", "node_type", "cpu", "memory"],
+            ),
+            ObjectFieldsPanel(
+                weight=150,
+                section=SectionChoices.LEFT_HALF,
+                label="Startup config",
+                fields=["config_source", "rename_interfaces"],
             ),
             ObjectsTablePanel(
                 weight=200,

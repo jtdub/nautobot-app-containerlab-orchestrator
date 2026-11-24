@@ -311,6 +311,9 @@ class NodeMappingConfigSourceTestCase(NodeMappingValidationTestCase):
     def test_config_source_defaults_to_lab_default(self):
         self.assertEqual(self.build_mapping().config_source, "")
 
+    def test_rename_interfaces_defaults_to_on(self):
+        self.assertTrue(self.build_mapping().rename_interfaces)
+
     def test_config_source_rejects_unknown_value(self):
         self.assert_field_error(self.build_mapping(config_source="ansible"), "config_source")
 
