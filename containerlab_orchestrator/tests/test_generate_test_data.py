@@ -11,8 +11,8 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import override_settings
 from nautobot.apps.testing import TestCase
-from nautobot.extras.models import DynamicGroup, GitRepository, GraphQLQuery
 from nautobot.dcim.models import Cable, Device, DeviceType, Location
+from nautobot.extras.models import DynamicGroup, GitRepository, GraphQLQuery
 from nautobot.ipam.models import VRF, IPAddress, Prefix
 
 from containerlab_orchestrator.build import build_lab

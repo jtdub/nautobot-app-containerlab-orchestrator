@@ -22,6 +22,7 @@ from nautobot.apps.choices import (
     SecretsGroupAccessTypeChoices,
     SecretsGroupSecretTypeChoices,
 )
+from nautobot.apps.utils import render_jinja2
 from nautobot.dcim.models import (
     Cable,
     Device,
@@ -33,7 +34,6 @@ from nautobot.dcim.models import (
     Manufacturer,
     Platform,
 )
-from nautobot.apps.utils import render_jinja2
 from nautobot.extras.choices import DynamicGroupTypeChoices
 from nautobot.extras.datasources.git import ensure_git_repository
 from nautobot.extras.models import (
