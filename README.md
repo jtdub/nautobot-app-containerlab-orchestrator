@@ -5,8 +5,8 @@
   <br>
   <a href="https://github.com/jtdub/nautobot-app-containerlab-orchestrator/actions"><img src="https://github.com/jtdub/nautobot-app-containerlab-orchestrator/actions/workflows/ci.yml/badge.svg?branch=develop"></a>
   <a href="https://nautobot-app-containerlab-orchestrator.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/nautobot-app-containerlab-orchestrator/badge/"></a>
-  <a href="https://pypi.org/project/containerlab-orchestrator/"><img src="https://img.shields.io/pypi/v/containerlab-orchestrator"></a>
-  <a href="https://pypi.org/project/containerlab-orchestrator/"><img src="https://img.shields.io/pypi/dm/containerlab-orchestrator"></a>
+  <a href="https://pypi.org/project/nautobot-containerlab-orchestrator/"><img src="https://img.shields.io/pypi/v/nautobot-containerlab-orchestrator"></a>
+  <a href="https://pypi.org/project/nautobot-containerlab-orchestrator/"><img src="https://img.shields.io/pypi/dm/nautobot-containerlab-orchestrator"></a>
   <br>
   An <a href="https://networktocode.com/nautobot-apps/">App</a> for <a href="https://nautobot.com/">Nautobot</a>.
 </p>

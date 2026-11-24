@@ -23,7 +23,7 @@ Here you will find detailed instructions on how to **install** and **configure**
 ## Install Guide
 
 !!! note
-    Apps can be installed from the [Python Package Index](https://pypi.org/) or locally. See the [Nautobot documentation](https://docs.nautobot.com/projects/core/en/stable/user-guide/administration/installation/app-install/) for more details. The pip package name for this app is [`containerlab-orchestrator`](https://pypi.org/project/containerlab-orchestrator/).
+    Apps can be installed from the [Python Package Index](https://pypi.org/) or locally. See the [Nautobot documentation](https://docs.nautobot.com/projects/core/en/stable/user-guide/administration/installation/app-install/) for more details. The pip package name for this app is [`nautobot-containerlab-orchestrator`](https://pypi.org/project/nautobot-containerlab-orchestrator/).
 
 !!! warning ""
     WARNING: The app needs Nautobot 3.2.8 or later. If your Nautobot is older, `pip` also upgrades Nautobot, and
@@ -35,13 +35,13 @@ Here you will find detailed instructions on how to **install** and **configure**
 The app is available as a Python package via PyPI and can be installed with `pip`:
 
 ```shell
-pip install containerlab-orchestrator
+pip install nautobot-containerlab-orchestrator
 ```
 
-To ensure Containerlab Orchestrator is automatically re-installed during future upgrades, create a file named `local_requirements.txt` (if not already existing) in the Nautobot root directory (alongside `requirements.txt`) and list the `containerlab-orchestrator` package:
+To ensure Containerlab Orchestrator is automatically re-installed during future upgrades, create a file named `local_requirements.txt` (if not already existing) in the Nautobot root directory (alongside `requirements.txt`) and list the `nautobot-containerlab-orchestrator` package:
 
 ```shell
-echo containerlab-orchestrator >> local_requirements.txt
+echo nautobot-containerlab-orchestrator >> local_requirements.txt
 ```
 
 To install a version that is not on PyPI, install the app from Git. Give the SHA of a commit, because a branch
@@ -55,7 +55,7 @@ To use the Golden Config startup config sources, install the `golden-config` ext
 Config and Nautobot Plugin Nornir:
 
 ```shell
-pip install "containerlab-orchestrator[golden-config]"
+pip install "nautobot-containerlab-orchestrator[golden-config]"
 ```
 
 Once installed, the app needs to be enabled in your Nautobot configuration. The following block of code below shows the additional configuration required to be added to your `nautobot_config.py` file:

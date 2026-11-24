@@ -16,7 +16,7 @@ Here you will find any steps necessary to upgrade the App in your Nautobot envir
    with the SHA of the new commit.
 
     ```shell
-    pip install --upgrade containerlab-orchestrator
+    pip install --upgrade nautobot-containerlab-orchestrator
     ```
 
 3. Run the migrations and clear the cache.
