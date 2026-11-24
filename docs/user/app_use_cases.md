@@ -103,7 +103,7 @@ A button shows only when its job accepts the user. The page uses the same checks
 
 | Condition | Buttons |
 |---|---|
-| An administrator turned on the job. See "Turn on the job" of each job. | The button of that job |
+| The job is on. The app turns on each job when you install the app. See "Turn on the job" of each job. | The button of that job |
 | The user has `extras.run_job` for the job. | The button of that job |
 | The user has `containerlab_orchestrator.view_lab` and `containerlab_orchestrator.change_lab` on the lab. | All five |
 | The user is the owner of the lab, or a superuser. | Build, Deploy, Redeploy, and Destroy |
@@ -521,11 +521,12 @@ the build time, and one node row for each node on the lab.
 
 #### Turn on the job
 
-Nautobot adds the job turned off. An administrator does these steps one time:
+The app turns on the job when you install the app. If an administrator turned the job off, do these steps:
 
 1. Open Jobs > Jobs, and edit the job "Build Lab Topology" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give each user who builds labs the permissions in the table below.
+
+Give each user who builds labs the permissions in the table below.
 
 | Permission | Reason |
 |---|---|
@@ -580,11 +581,12 @@ status, and it writes the state, the container ID, and the management address of
 
 #### Turn on the job
 
-Nautobot adds the job turned off. An administrator does these steps one time:
+The app turns on the job when you install the app. If an administrator turned the job off, do these steps:
 
 1. Open Jobs > Jobs, and edit the job "Deploy Lab" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give each user who deploys labs the permissions in the table below.
+
+Give each user who deploys labs the permissions in the table below.
 
 | Permission | Reason |
 |---|---|
@@ -706,11 +708,12 @@ status, and it clears the state and the container ID of each node row.
 
 #### Turn on the job
 
-Nautobot adds the job turned off. An administrator does these steps one time:
+The app turns on the job when you install the app. If an administrator turned the job off, do these steps:
 
 1. Open Jobs > Jobs, and edit the job "Destroy Lab" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give each user who destroys labs the permissions in the table below.
+
+Give each user who destroys labs the permissions in the table below.
 
 | Permission | Reason |
 |---|---|
@@ -842,11 +845,12 @@ container ID, and the management address of each node row.
 
 #### Turn on the job
 
-Nautobot adds the job turned off. An administrator does these steps one time:
+The app turns on the job when you install the app. If an administrator turned the job off, do these steps:
 
 1. Open Jobs > Jobs, and edit the job "Redeploy Lab" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give each user who redeploys labs the permissions in the table below.
+
+Give each user who redeploys labs the permissions in the table below.
 
 | Permission | Reason |
 |---|---|
@@ -972,11 +976,12 @@ Run the job when the lab page does not agree with the host. Two time limits can 
 
 #### Turn on the job
 
-Nautobot adds the job turned off. An administrator does these steps one time:
+The app turns on the job when you install the app. If an administrator turned the job off, do these steps:
 
 1. Open Jobs > Jobs, and edit the job "Inspect Lab" in the group "Containerlab Orchestrator".
 2. Select "Enabled", and save the job.
-3. Give each user who inspects labs the permissions in the table below.
+
+Give each user who inspects labs the permissions in the table below.
 
 | Permission | Reason |
 |---|---|
@@ -1154,7 +1159,7 @@ Lab, run Sync Labs one time by hand, and make sure that each lab in scope has a 
 
 #### Turn on the job
 
-Turn on "Sync Labs" as "Turn on the job" of Inspect Lab shows. Give the user of the schedule these permissions:
+The app turns on "Sync Labs" when you install the app. If an administrator turned the job off, do the steps of "Turn on the job" of Inspect Lab. Give the user of the schedule these permissions:
 
 | Permission | Reason |
 |---|---|

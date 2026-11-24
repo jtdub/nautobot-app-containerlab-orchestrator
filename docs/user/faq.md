@@ -2,9 +2,9 @@
 
 ## The lab page shows no Build, Deploy, or other job button
 
-Nautobot adds each job of the app turned off, and the lab page shows a button only for a job that is on. An
-administrator turns on each job. See [Who sees a button](app_use_cases.md#who-sees-a-button) and "Turn on the job" of
-[Build a lab](app_use_cases.md#turn-on-the-job).
+The lab page shows a button only for a job that is on and that you can run. The app turns on each job when you
+install the app, but an administrator can turn a job off. See [Who sees a button](app_use_cases.md#who-sees-a-button)
+and "Turn on the job" of [Build a lab](app_use_cases.md#turn-on-the-job).
 
 ## Deploy Lab fails with "Host `<host>` does not have these images: `<images>`."
 

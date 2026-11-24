@@ -105,8 +105,8 @@ def create_lab_job_result(task_kwargs, age=None, **fields):
 
 
 def create_lab_statuses():
-    """Create the lab statuses of migration 0005 again, for a test that runs after a database flush."""
-    importlib.import_module("containerlab_orchestrator.migrations.0005_lab_statuses").add_lab_statuses(apps, None)
+    """Create the lab statuses of migration 0001 again, for a test that runs after a database flush."""
+    importlib.import_module("containerlab_orchestrator.migrations.0001_initial").add_lab_statuses(apps, None)
 
 
 def create_containerlab_hosts():
