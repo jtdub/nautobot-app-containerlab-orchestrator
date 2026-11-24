@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "containerlab-orchestrator"
-version = "0.1.0a0"
+version = "1.0.0"
 description = "Containerlab Orchestrator"
-authors = ["Network to Code, LLC <info@networktocode.com>"]
+authors = ["James Williams <james.williams@jtdub.com>"]
 license = "Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/jtdub/nautobot-app-containerlab-orchestrator"
 repository = "https://github.com/jtdub/nautobot-app-containerlab-orchestrator"
-documentation = "https://docs.nautobot.com/projects/containerlab-orchestrator/en/latest/"
+documentation = "https://nautobot-app-containerlab-orchestrator.readthedocs.io/en/latest/"
 keywords = ["nautobot", "nautobot-app", "nautobot-plugin"]
 classifiers = [
     "Intended Audience :: Developers",
