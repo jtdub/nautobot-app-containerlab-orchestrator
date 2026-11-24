@@ -264,6 +264,9 @@ Run `invoke generate-test-data` to load the demo data. The command makes these o
 - The Linux hosts `dc1-host1` to `dc1-host4`. Each host connects `eth1` to `Ethernet1` of the leaf with the same number.
 - One cable from each leaf to each spine. Leaf port `Ethernet49` goes to spine 1, and `Ethernet50` goes to spine 2. The leaf number is the spine port, for example `dc1-leaf3` connects to `Ethernet3`.
 - A node mapping of each Arista model to the `ceos` kind with the image `ceos:4.37.0F`, and of the Linux model to the `linux` kind with the image `alpine:latest`. Each data port `EthernetN` or `ethN` maps to `ethN`.
+- The Arista node mappings use the config source "Golden Config backup", with "Rename interfaces" off. The Linux nodes get no startup config.
+- The Git repository "Demo device configs" of [clab-orchestrator-demo](https://github.com/jtdub/clab-orchestrator-demo). It provides Golden Config backup configs at `configs/<device>.cfg`.
+- The Golden Config setting "Demo DC1", with the Dynamic Group "Demo DC1 Arista devices" and the GraphQL query "Demo DC1 Golden Config".
 - The Containerlab host `demo-clab`. It uses `CLAB_DEV_HOST_URL` and the two `CLAB_DEV_HOST_*` account variables from `creds.env`. See [Local clab-api-server](#local-clab-api-server).
 - The lab `demo-spine-leaf` in the Planned status. Its device filter selects the devices of "Demo DC1". The first superuser is its owner.
 
@@ -277,7 +280,11 @@ The demo data uses these prefixes of the Global namespace. Each prefix belongs t
 
 The management interface of each device is in the VRF `MGMT`. Its address is the primary IPv4 of the device. The lab uses `10.20.20.0/24` as its management subnet. Thus each primary IPv4 is also the management address that containerlab gives the node.
 
-A second run makes no duplicate.
+After the command saves the data, it clones the repository and saves the backup of each Arista device in Golden Config. Then it starts the "Git Repository: Sync" job. The Nautobot container must have access to GitHub. If the clone fails, the command gives a warning, and the Arista nodes get no startup config.
+
+If Golden Config is not installed, the command does not make the Golden Config data. The Arista nodes then get no startup config.
+
+A second run makes no duplicate. A second run also loads the backups again.
 
 !!! warning
     The flush deletes each prefix and IP address inside the three demo prefixes, also when you made them. Do not keep your own data in these ranges.

@@ -1,1 +1,2 @@
 Added demo data to `invoke generate-test-data`: an Arista spine and leaf fabric, four Linux hosts, a containerlab host, and a lab.
+Added Golden Config backups to the demo data. The Arista lab nodes get the EVPN VXLAN configs of the demo repository as their startup configs.

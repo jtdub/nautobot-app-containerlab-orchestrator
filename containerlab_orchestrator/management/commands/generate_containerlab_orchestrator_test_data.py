@@ -2,16 +2,20 @@
 
 The demo data is one location with an Arista spine and leaf fabric, a Linux host on each leaf, the IP addresses of
 each link and each management interface, the node mappings, a containerlab host, and a lab of the location devices.
+When Golden Config is installed, the Arista nodes get their startup configs from the backups of a demo Git repository.
 """
 
 import ipaddress
 import os
+from pathlib import Path
 from typing import NamedTuple
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
 from django.db import DEFAULT_DB_ALIAS, transaction
+from django.utils import timezone
 from nautobot.apps.choices import (
     InterfaceTypeChoices,
     PrefixTypeChoices,
@@ -29,10 +33,23 @@ from nautobot.dcim.models import (
     Manufacturer,
     Platform,
 )
-from nautobot.extras.models import Role, Secret, SecretsGroup, SecretsGroupAssociation, Status
+from nautobot.apps.utils import render_jinja2
+from nautobot.extras.choices import DynamicGroupTypeChoices
+from nautobot.extras.datasources.git import ensure_git_repository
+from nautobot.extras.models import (
+    DynamicGroup,
+    GitRepository,
+    GraphQLQuery,
+    Role,
+    Secret,
+    SecretsGroup,
+    SecretsGroupAssociation,
+    Status,
+)
 from nautobot.ipam.models import VRF, IPAddress, Namespace, Prefix, VRFDeviceAssignment, VRFPrefixAssignment
 
 from containerlab_orchestrator.choices import LabStatusChoices, NodeMappingConfigSourceChoices
+from containerlab_orchestrator.config_sources import GOLDEN_CONFIG_APP, golden_config_installed
 from containerlab_orchestrator.models import ContainerlabHost, InterfaceMapping, Lab, NodeMapping
 
 
@@ -50,6 +67,8 @@ class DemoModel(NamedTuple):
 
     kind: str
     image: str
+    uses_backup: bool
+    """True if the node gets its startup config from the Golden Config backup of the device."""
 
     def ports(self):
         """Return the name and the interface type of each data port."""
@@ -87,6 +106,7 @@ SPINE = DemoModel(
     ((1, 32, InterfaceTypeChoices.TYPE_100GE_QSFP28),),
     "ceos",
     "ceos:4.37.0F",
+    True,
 )
 LEAF = DemoModel(
     "Arista",
@@ -98,6 +118,7 @@ LEAF = DemoModel(
     ((1, 48, InterfaceTypeChoices.TYPE_25GE_SFP28), (49, 56, InterfaceTypeChoices.TYPE_100GE_QSFP28)),
     "ceos",
     "ceos:4.37.0F",
+    True,
 )
 SERVER = DemoModel(
     "Generic",
@@ -109,6 +130,7 @@ SERVER = DemoModel(
     ((1, 1, InterfaceTypeChoices.TYPE_25GE_SFP28),),
     "linux",
     "alpine:latest",
+    False,
 )
 DEMO_MODELS = (SPINE, LEAF, SERVER)
 
@@ -151,6 +173,24 @@ SECRET_VARIABLES = {
 
 LAB_NAME = "demo-spine-leaf"
 LAB_MGMT_SUBNET = MGMT_PREFIX
+
+REPOSITORY_NAME = "Demo device configs"
+REPOSITORY_URL = "https://github.com/jtdub/clab-orchestrator-demo.git"
+REPOSITORY_BRANCH = "main"
+BACKUP_CONTENT = "nautobot_golden_config.backupconfigs"
+BACKUP_PATH_TEMPLATE = "configs/{{obj.name}}.cfg"
+GOLDEN_CONFIG_NAME = "Demo DC1"
+GOLDEN_CONFIG_WEIGHT = 2000
+"""The weight of the demo setting. It is more than the weight of the Golden Config default setting."""
+
+DYNAMIC_GROUP_NAME = "Demo DC1 Arista devices"
+GRAPHQL_QUERY_NAME = "Demo DC1 Golden Config"
+GRAPHQL_QUERY = "query ($device_id: ID!) {\n  device(id: $device_id) {\n    name\n  }\n}"
+"""The smallest SoTAgg query that Golden Config accepts. A setting needs one when SoTAgg is on."""
+
+NO_GOLDEN_CONFIG_MESSAGE = "Golden Config is not installed, so the demo nodes get no startup config."
+CLONE_FAILED_MESSAGE = "Cannot clone {url}: {error}. The demo nodes get no startup config."
+MISSING_BACKUP_MESSAGE = "Device {device}: the demo repository has no file {path}."
 
 
 def demo_links():
@@ -206,6 +246,8 @@ class Command(BaseCommand):
                 self._flush(database)
             self._generate_static_data(database)
         self.stdout.write(self.style.SUCCESS(f"Database {database} populated with app data successfully!"))
+        if not golden_config_installed():
+            self.stdout.write(self.style.WARNING(NO_GOLDEN_CONFIG_MESSAGE))
 
     def _flush(self, db):
         """Delete the objects that only the demo data uses.
@@ -213,6 +255,12 @@ class Command(BaseCommand):
         Keep the shared manufacturers, platforms, and roles. Keep the MGMT VRF if other devices or prefixes use it.
         """
         Lab.objects.using(db).filter(name=LAB_NAME, host__name=HOST_NAME).delete()
+        if golden_config_installed():
+            golden_config_model = apps.get_model(GOLDEN_CONFIG_APP, "GoldenConfigSetting")
+            golden_config_model.objects.using(db).filter(name=GOLDEN_CONFIG_NAME).delete()
+        DynamicGroup.objects.using(db).filter(name=DYNAMIC_GROUP_NAME).delete()
+        GraphQLQuery.objects.using(db).filter(name=GRAPHQL_QUERY_NAME).delete()
+        GitRepository.objects.using(db).filter(name=REPOSITORY_NAME).delete()
         ContainerlabHost.objects.using(db).filter(name=HOST_NAME).delete()
         SecretsGroup.objects.using(db).filter(name=SECRETS_GROUP_NAME).delete()
         Secret.objects.using(db).filter(name__startswith=f"{SECRETS_GROUP_NAME} ").delete()
@@ -264,6 +312,8 @@ class Command(BaseCommand):
         self._address_links(db, devices, namespace, location)
         self._address_management(db, devices, namespace, location)
         self._lab(db, self._host(db))
+        if golden_config_installed():
+            self._golden_config(db, device_content_type)
 
     def _location(self, db, device_content_type, status):
         """Return the demo location, and create it and its location type if they do not exist.
@@ -301,12 +351,14 @@ class Command(BaseCommand):
                 for name, interface_type in demo_model.ports()
             )
             InterfaceTemplate.objects.using(db).bulk_create(templates)
+        uses_backup = demo_model.uses_backup and golden_config_installed()
         node_mapping, created = NodeMapping.objects.using(db).get_or_create(
             device_type=device_type,
             defaults={
                 "kind": demo_model.kind,
                 "image": demo_model.image,
-                "config_source": NodeMappingConfigSourceChoices.NONE,
+                "config_source": NodeMappingConfigSourceChoices.GOLDEN_CONFIG_BACKUP if uses_backup else "",
+                "rename_interfaces": not uses_backup,
             },
         )
         if created:
@@ -410,3 +462,72 @@ class Command(BaseCommand):
             config_source=NodeMappingConfigSourceChoices.NONE,
         )
         lab.validated_save()
+
+    def _golden_config(self, db, device_content_type):
+        """Create the backup repository and the Golden Config setting of the Arista devices.
+
+        After the commit, load the backup of each Arista device from a clone of the repository, then start the sync job.
+        """
+        repository, _ = GitRepository.objects.using(db).get_or_create(
+            name=REPOSITORY_NAME,
+            defaults={
+                "remote_url": REPOSITORY_URL,
+                "branch": REPOSITORY_BRANCH,
+                "provided_contents": [BACKUP_CONTENT],
+            },
+        )
+        query, _ = GraphQLQuery.objects.using(db).get_or_create(
+            name=GRAPHQL_QUERY_NAME, defaults={"query": GRAPHQL_QUERY}
+        )
+        dynamic_group, _ = DynamicGroup.objects.using(db).get_or_create(
+            name=DYNAMIC_GROUP_NAME,
+            defaults={
+                "content_type": device_content_type,
+                "group_type": DynamicGroupTypeChoices.TYPE_DYNAMIC_FILTER,
+                "filter": {"location": [LOCATION_NAME], "role": [SPINE_ROLE, LEAF_ROLE]},
+            },
+        )
+        setting_model = apps.get_model(GOLDEN_CONFIG_APP, "GoldenConfigSetting")
+        if not setting_model.objects.using(db).filter(name=GOLDEN_CONFIG_NAME).exists():
+            setting_model(
+                name=GOLDEN_CONFIG_NAME,
+                slug="demo-dc1",
+                weight=GOLDEN_CONFIG_WEIGHT,
+                backup_repository=repository,
+                backup_path_template=BACKUP_PATH_TEMPLATE,
+                backup_test_connectivity=False,
+                sot_agg_query=query,
+                dynamic_group=dynamic_group,
+            ).validated_save()
+        transaction.on_commit(lambda: self._load_backups(db, repository), using=db)
+
+    def _load_backups(self, db, repository):
+        """Clone the repository, save the backup of each Arista device in Golden Config, and start the sync job.
+
+        A clone error of any type gives a warning, because the rest of the demo data is still usable.
+        """
+        try:
+            ensure_git_repository(repository)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            self.stdout.write(self.style.WARNING(CLONE_FAILED_MESSAGE.format(url=REPOSITORY_URL, error=error)))
+            return
+        record_model = apps.get_model(GOLDEN_CONFIG_APP, "GoldenConfig")
+        now = timezone.now()
+        devices = Device.objects.using(db).filter(location__name=LOCATION_NAME, role__name__in=[SPINE_ROLE, LEAF_ROLE])
+        for device in devices.order_by("name"):
+            path = render_jinja2(BACKUP_PATH_TEMPLATE, {"obj": device})
+            backup_file = Path(repository.filesystem_path) / path
+            if not backup_file.is_file():
+                self.stdout.write(self.style.WARNING(MISSING_BACKUP_MESSAGE.format(device=device.name, path=path)))
+                continue
+            record_model.objects.using(db).update_or_create(
+                device=device,
+                defaults={
+                    "backup_config": backup_file.read_text(),
+                    "backup_last_attempt_date": now,
+                    "backup_last_success_date": now,
+                },
+            )
+        owner = get_user_model().objects.db_manager(db).filter(is_superuser=True).order_by("date_joined").first()
+        if owner is not None:
+            repository.sync(user=owner)
