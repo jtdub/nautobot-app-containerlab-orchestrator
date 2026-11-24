@@ -255,6 +255,40 @@ Password (again):
 Superuser created successfully.
 ```
 
+### Invoke - Loading the Demo Data
+
+Run `invoke generate-test-data` to load the demo data. The command makes these objects at the location "Demo DC1":
+
+- The Arista spines `dc1-spine1` and `dc1-spine2`, model DCS-7280CR3-32P4.
+- The Arista leafs `dc1-leaf1` to `dc1-leaf4`, model DCS-7050SX3-48YC8.
+- The Linux hosts `dc1-host1` to `dc1-host4`. Each host connects `eth1` to `Ethernet1` of the leaf with the same number.
+- One cable from each leaf to each spine. Leaf port `Ethernet49` goes to spine 1, and `Ethernet50` goes to spine 2. The leaf number is the spine port, for example `dc1-leaf3` connects to `Ethernet3`.
+- A node mapping of each Arista model to the `ceos` kind with the image `ceos:4.37.0F`, and of the Linux model to the `linux` kind with the image `alpine:latest`. Each data port `EthernetN` or `ethN` maps to `ethN`.
+- The Containerlab host `demo-clab`. It uses `CLAB_DEV_HOST_URL` and the two `CLAB_DEV_HOST_*` account variables from `creds.env`. See [Local clab-api-server](#local-clab-api-server).
+- The lab `demo-spine-leaf` in the Planned status. Its device filter selects the devices of "Demo DC1". The first superuser is its owner.
+
+The demo data uses these prefixes of the Global namespace. Each prefix belongs to "Demo DC1".
+
+| Prefix | Type | Use |
+| --- | --- | --- |
+| `10.1.0.0/24` | Container | One /31 for each spine to leaf link. The spine gets the even address, and the leaf gets the odd address. |
+| `10.1.1.0/24` | Container | One /31 for each leaf to host link. The leaf gets the even address, and the host gets the odd address. |
+| `10.20.20.0/24` | Network | The management prefix, in the VRF `MGMT`. |
+
+The management interface of each device is in the VRF `MGMT`. Its address is the primary IPv4 of the device. The lab uses `10.20.20.0/24` as its management subnet. Thus each primary IPv4 is also the management address that containerlab gives the node.
+
+A second run makes no duplicate.
+
+!!! warning
+    The flush deletes each prefix and IP address inside the three demo prefixes, also when you made them. Do not keep your own data in these ranges.
+
+To delete the demo data and load it again, run `invoke generate-test-data --flush`.
+
+The flush keeps the manufacturers, the platforms, and the roles, because other data can use them. It also keeps the VRF `MGMT` when other devices or prefixes use it.
+
+!!! note
+    Arista does not publish the cEOS image to a registry. Import the image as `ceos:4.37.0F` on the containerlab host before you deploy the lab. Read the [lab rules for the local server](#lab-rules-for-the-local-server) before you deploy ten nodes.
+
 ### Invoke - Stopping the Development Environment
 
 The last command to know for now is `invoke stop`.
