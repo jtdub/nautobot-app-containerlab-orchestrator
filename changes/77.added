@@ -1,3 +1,0 @@
-Added the Deploy Lab job, which deploys the stored topology of a lab to its containerlab host and sets the status.
-Added an image check before each deploy. The job stops and lists each image that the host does not have.
-Added the Deploy Lab job turned off. An administrator turns it on under Jobs and gives the permissions in the user docs.

@@ -1,3 +1,0 @@
-Added labs to the REST API. The owner is the user who creates the lab, and a new lab gets the Planned status.
-Added a read-only lab nodes endpoint to the REST API, with filters for lab, device, and stub.
-Added labs and lab nodes to GraphQL.

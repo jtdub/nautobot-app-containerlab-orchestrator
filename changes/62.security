@@ -1,1 +1,0 @@
-Removed the stored topology YAML from the lab change log and webhook payloads, because it can hold device configs.

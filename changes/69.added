@@ -1,1 +1,0 @@
-Added the max_lab_devices setting, which limits the number of devices that a lab can select. The default is 100.

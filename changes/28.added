@@ -1,1 +1,0 @@
-Added Containerlab hosts to the REST API and GraphQL. A host stores the clab-api-server URL, the Verify SSL setting, and a Secrets Group.
