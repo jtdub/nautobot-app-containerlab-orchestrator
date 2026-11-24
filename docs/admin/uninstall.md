@@ -29,10 +29,10 @@ Remove the configuration you added in `nautobot_config.py` from `PLUGINS` & `PLU
 ## Uninstall the package
 
 ```shell
-pip uninstall containerlab-orchestrator
+pip uninstall nautobot-containerlab-orchestrator
 ```
 
-Remove `containerlab-orchestrator` from `local_requirements.txt`. Then restart the Nautobot, worker, and scheduler
+Remove `nautobot-containerlab-orchestrator` from `local_requirements.txt`. Then restart the Nautobot, worker, and scheduler
 services.
 
 ```shell

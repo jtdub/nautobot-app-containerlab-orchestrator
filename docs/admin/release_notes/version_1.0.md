@@ -17,3 +17,4 @@ This document describes all new features and changes in the release. The format 
 - Added Golden Config intended and backup configs as the startup config of a lab node.
 - Added job buttons to the lab page. The app turns on all six jobs when you install it.
 - Added hosts, node mappings, interface mappings, labs, and lab nodes to the REST API and GraphQL.
+- Added the PyPI package nautobot-containerlab-orchestrator. Install it with pip, and add containerlab_orchestrator to PLUGINS.

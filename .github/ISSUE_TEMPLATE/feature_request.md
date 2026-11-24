@@ -7,7 +7,7 @@ labels:
 
 ### Environment
 * Nautobot version:  <!-- Example: 3.1.0 -->
-* containerlab-orchestrator version:  <!-- Example: 1.0.0 -->
+* nautobot-containerlab-orchestrator version:  <!-- Example: 1.0.0 -->
 
 <!--
     Describe in detail the new functionality you are proposing.
