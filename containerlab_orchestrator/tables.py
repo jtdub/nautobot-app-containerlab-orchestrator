@@ -43,6 +43,7 @@ class NodeMappingTable(BaseTable):
     kind = tables.Column(linkify=True)
     image = tables.Column()
     config_source = tables.Column()
+    rename_interfaces = BooleanColumn()
     tags = TagColumn(url_name="plugins:containerlab_orchestrator:nodemapping_list")
     actions = ButtonsColumn(NodeMapping)
 
@@ -60,6 +61,7 @@ class NodeMappingTable(BaseTable):
             "cpu",
             "memory",
             "config_source",
+            "rename_interfaces",
             "tags",
             "actions",
         )

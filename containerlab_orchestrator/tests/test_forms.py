@@ -168,6 +168,12 @@ class NodeMappingFilterFormTestCase(TestCase):
             with self.subTest(field=field_name):
                 self.assertNotIn('placeholder="None"', str(form[field_name]))
 
+    def test_rename_interfaces_filter_offers_empty_blank_yes_and_no(self):
+        rendered = str(NodeMappingFilterForm()["rename_interfaces"])
+
+        options = re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', rendered)
+        self.assertEqual(options, [("", "---------"), ("True", "Yes"), ("False", "No")])
+
 
 class NodeMappingBulkEditFormTestCase(TestCase):
     """Test the NodeMapping bulk edit form."""
@@ -177,6 +183,15 @@ class NodeMappingBulkEditFormTestCase(TestCase):
         for field_name in NodeMappingBulkEditForm.declared_fields:
             with self.subTest(field=field_name):
                 self.assertNotIn('placeholder="None"', str(form[field_name]))
+
+    def test_rename_interfaces_can_be_cleared_or_left_unchanged(self):
+        create_node_mappings()
+        pk = str(NodeMapping.objects.first().pk)
+        for value, expected in (("False", False), ("True", True), ("", None)):
+            with self.subTest(value=value):
+                form = NodeMappingBulkEditForm(NodeMapping, data={"pk": [pk], "rename_interfaces": value})
+                self.assertTrue(form.is_valid(), form.errors)
+                self.assertIs(form.cleaned_data["rename_interfaces"], expected)
 
 
 class LabFormTestCase(TestCase):
