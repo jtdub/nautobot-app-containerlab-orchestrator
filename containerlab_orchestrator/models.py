@@ -191,6 +191,14 @@ class NodeMapping(PrimaryModel):  # pylint: disable=too-many-ancestors
             "Each user who can view the lab can see the result."
         ),
     )
+    rename_interfaces = models.BooleanField(
+        default=True,
+        verbose_name="Rename interfaces",
+        help_text=(
+            "Change the physical interface names in a Golden Config text to the container names. "
+            "Clear this for a kind, such as ceos, that uses the physical names in its config."
+        ),
+    )
 
     natural_key_field_names = ["device_type", "platform"]
 
